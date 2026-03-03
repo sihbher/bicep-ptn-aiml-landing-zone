@@ -19,8 +19,11 @@ Choose your preferred deployment method based on project requirements and enviro
 
 **Required Tools:**
 
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
 - [Azure Developer CLI](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/install-azd)
 - [Git](https://git-scm.com/downloads)
+
+> Azure CLI is included as a prerequisite for future pre/post provisioning hooks that may depend on it.
 
 ### Basic Deployment
 
