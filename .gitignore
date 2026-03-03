@@ -12,6 +12,7 @@
 *.env
 .local
 .azure
+.~vsdx
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
