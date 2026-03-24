@@ -105,37 +105,18 @@ The following role assignments are provisioned by the template based on the **de
 
 #### Container App Role Assignments
 
+Current default configuration provisions a single Hello World container app (`orchestrator`), so only the assignments below are expected by default.
+
 | Resource | Role | Assignee | Description |
 | --- | --- | --- | --- |
 | GenAI App Configuration Store | App Configuration Data Reader | ContainerApp: orchestrator | Read configuration data |
-| GenAI App Configuration Store | App Configuration Data Reader | ContainerApp: frontend | Read configuration data |
-| GenAI App Configuration Store | App Configuration Data Reader | ContainerApp: dataingest | Read configuration data |
-| GenAI App Configuration Store | App Configuration Data Reader | ContainerApp: mcp | Read configuration data |
 | GenAI App Container Registry | AcrPull | ContainerApp: orchestrator | Pull container images |
-| GenAI App Container Registry | AcrPull | ContainerApp: frontend | Pull container images |
-| GenAI App Container Registry | AcrPull | ContainerApp: dataingest | Pull container images |
-| GenAI App Container Registry | AcrPull | ContainerApp: mcp | Pull container images |
 | GenAI App Key Vault | Key Vault Secrets User | ContainerApp: orchestrator | Read secrets |
-| GenAI App Key Vault | Key Vault Secrets User | ContainerApp: frontend | Read secrets |
-| GenAI App Key Vault | Key Vault Secrets User | ContainerApp: dataingest | Read secrets |
-| GenAI App Key Vault | Key Vault Secrets User | ContainerApp: mcp | Read secrets |
 | GenAI App Search Service | Search Index Data Reader | ContainerApp: orchestrator | Read index data |
-| GenAI App Search Service | Search Index Data Contributor | ContainerApp: dataingest | Read/write index data |
-| GenAI App Search Service | Search Index Data Contributor | ContainerApp: mcp | Read/write index data |
 | GenAI App Storage Account | Storage Blob Data Reader | ContainerApp: orchestrator | Read blob data |
-| GenAI App Storage Account | Storage Blob Data Reader | ContainerApp: frontend | Read blob data |
-| GenAI App Storage Account | Storage Blob Delegator | ContainerApp: frontend | Delegate blob access |
-| GenAI App Storage Account | Storage Blob Data Contributor | ContainerApp: dataingest | Read/write blob data |
-| GenAI App Storage Account | Storage Blob Data Contributor | ContainerApp: mcp | Read/write blob data |
 | GenAI App Cosmos DB | Cosmos DB Built-in Data Contributor | ContainerApp: orchestrator | Read/write Cosmos DB data |
-| GenAI App Cosmos DB | Cosmos DB Built-in Data Contributor | ContainerApp: dataingest | Read/write Cosmos DB data |
-| GenAI App Cosmos DB | Cosmos DB Built-in Data Contributor | ContainerApp: mcp | Read/write Cosmos DB data |
 | Microsoft Foundry Account | Cognitive Services User | ContainerApp: orchestrator | Access Cognitive Services |
-| Microsoft Foundry Account | Cognitive Services User | ContainerApp: dataingest | Access Cognitive Services |
-| Microsoft Foundry Account | Cognitive Services User | ContainerApp: mcp | Access Cognitive Services |
 | Microsoft Foundry Account | Cognitive Services OpenAI User | ContainerApp: orchestrator | Use OpenAI APIs |
-| Microsoft Foundry Account | Cognitive Services OpenAI User | ContainerApp: dataingest | Use OpenAI APIs |
-| Microsoft Foundry Account | Cognitive Services OpenAI User | ContainerApp: mcp | Use OpenAI APIs |
 
 #### Executor Role Assignments
 

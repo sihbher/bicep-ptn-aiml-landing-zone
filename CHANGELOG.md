@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.0.3] - 2026-03-24
+### Changed
+- Simplified the default workload in `main.parameters.json` to a single Hello World container app (`orchestrator`) by removing GPT-RAG-specific defaults (`frontend`, `dataingest`, and `mcp`).
+- Reduced default data resources by keeping only the `documents` storage container and `conversations` Cosmos DB container.
+- Updated default chat model deployment from `gpt-4.1-mini` to `gpt-5-nano` and aligned model API versions to `2025-12-01-preview`.
+
+### Removed
+- Removed GPT-RAG-specific App Configuration keys from template defaults (`PROMPT_SOURCE`, `AGENT_STRATEGY`, and `AGENT_ID`).
+- Removed tracked generated build artifact `main.json` from source control.
+
+### Documentation
+- Updated README container app role assignments to match current default configuration (Hello World `orchestrator` only).
+
 ## [v1.0.2] - 2026-03-17
 ### Fixed
 - Fixed provisioning failures caused by unguarded references to outputs from optional resources when feature flags are disabled.

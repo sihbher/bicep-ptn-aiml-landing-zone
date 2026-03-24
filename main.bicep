@@ -1484,10 +1484,10 @@ module aiFoundry 'modules/ai-foundry/main.bicep' = if (deployAiFoundry) {
           {
             model: {
               format: 'OpenAI'
-              name: 'gpt-4.1-mini'
-              version: '2025-04-14'
+              name: 'gpt-5-nano'
+              version: '2025-08-07'
             }
-            name: 'gpt-4.1-mini'
+            name: 'gpt-5-nano'
             sku: {
               name: 'GlobalStandard'
               capacity: 40
@@ -2943,14 +2943,11 @@ module appConfigPopulate 'modules/app-configuration/app-configuration.bicep' = i
       { name: 'USE_UAI',             value: string(_useUAI),                        label: appConfigLabel, contentType: 'text/plain' }
       { name: 'LOG_LEVEL',           value: 'INFO',                                 label: appConfigLabel, contentType: 'text/plain' }
       { name: 'ENABLE_CONSOLE_LOGGING', value: 'true',                              label: appConfigLabel, contentType: 'text/plain' }
-      { name: 'PROMPT_SOURCE',       value: 'file',                                 label: appConfigLabel, contentType: 'text/plain' }
       { name: 'RELEASE',     value: _manifest.tag,                      label: appConfigLabel, contentType: 'text/plain' }
       #disable-next-line BCP318
       { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: (deployAppInsights && deployLogAnalytics) ? appInsights.outputs.connectionString : '',   label: appConfigLabel, contentType: 'text/plain' }
       #disable-next-line BCP318
       { name: 'APPLICATIONINSIGHTS__INSTRUMENTATIONKEY', value: (deployAppInsights && deployLogAnalytics) ? appInsights.outputs.instrumentationKey : '', label: appConfigLabel, contentType: 'text/plain' }
-      { name: 'AGENT_STRATEGY', value: 'single_agent_rag', label: appConfigLabel, contentType: 'text/plain' }
-      { name: 'AGENT_ID', value: '', label: appConfigLabel, contentType: 'text/plain' }
 
       //── Resource IDs ─────────────────────────────────────────────────────
       #disable-next-line BCP318
