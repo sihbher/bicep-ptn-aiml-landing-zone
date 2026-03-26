@@ -1,5 +1,4 @@
-> [!IMPORTANT]
-> Please open this Pull Request with the target branch set to `develop`.
+IMPORTANT:  Please open this Pull Request with the target branch set to develop. (remove this line)
 
 ## Purpose
 
