@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.0.4] - 2026-03-29
+### Changed
+- Made Cosmos DB container throughput parameterizable per container entry instead of hardcoded to 400 RU/s.
+- Used Bicep safe access operator (`container.?indexingPolicy`) replacing verbose `contains()` pattern.
+
 ## [v1.0.3] - 2026-03-24
 ### Changed
 - Simplified the default workload in `main.parameters.json` to a single Hello World container app (`orchestrator`) by removing GPT-RAG-specific defaults (`frontend`, `dataingest`, and `mcp`).

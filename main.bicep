@@ -2041,7 +2041,7 @@ module cosmosDBAccount 'br/public:avm/res/document-db/database-account:0.15.1' =
             name: container.name
             paths: [container.partitionKey]
             defaultTtl: -1
-            throughput: 400
+            throughput: container.throughput
             indexingPolicy: container.?indexingPolicy
           }
         ]
