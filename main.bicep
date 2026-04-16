@@ -424,7 +424,8 @@ var _jumpbxSubnetId = _networkIsolation ? '${virtualNetworkResourceId}/subnets/$
 var _agentSubnetId = _networkIsolation ? '${virtualNetworkResourceId}/subnets/${agentSubnetName}' : ''
 
 var _peLocation = !empty(privateEndpointLocation) ? privateEndpointLocation : location
-var _peResourceGroupName = !empty(privateEndpointResourceGroupName) ? privateEndpointResourceGroupName : (useExistingVNet && !sideBySideDeploy ? varExistingVnetResourceGroupName : resourceGroup().name)
+var _defaultPeResourceGroupName = useExistingVNet && !sideBySideDeploy ? varExistingVnetResourceGroupName : resourceGroup().name
+var _peResourceGroupName = !empty(privateEndpointResourceGroupName) ? privateEndpointResourceGroupName : _defaultPeResourceGroupName
 
 // ----------------------------------------------------------------------
 // VM vars
