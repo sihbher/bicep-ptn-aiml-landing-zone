@@ -1894,16 +1894,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = if (deployKeyVault) {
   }
 }
 
-resource existingkeyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
-  name: keyVaultName
-  dependsOn: [
-    keyVault
-  ]
-}
-
 // Provision Container App secrets in Key Vault (only happens when useAPIKeys is true)
 resource secret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = [for (config, i) in _containerAppsKeyVaultKeys: {
-  parent: existingkeyVault
+  parent: keyVault
   name: replace(config.name, '_', '-')
   properties: {
       contentType: config.contentType
