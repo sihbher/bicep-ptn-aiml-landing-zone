@@ -1687,7 +1687,6 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2025-01-01' = if (deplo
       infrastructureSubnetId: _caEnvSubnetId
       internal: true
     } : null
-    publicNetworkAccess: networkIsolation ? 'Disabled' : 'Enabled'
   }
   dependsOn: [
     #disable-next-line BCP321
