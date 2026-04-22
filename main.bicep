@@ -66,6 +66,9 @@ param location string = resourceGroup().location
 @description('The Azure region where Cosmos DB will be created. Defaults to the resource group location.')
 param cosmosLocation string = resourceGroup().location
 
+@description('The Azure region where Azure AI Search services will be created. Defaults to the main deployment location. Override this when the primary region is out of capacity for AI Search.')
+param searchServiceLocation string = ''
+
 @description('Principal ID for role assignments. This is typically the Object ID of the user or service principal running the deployment.')
 param principalId string
 
@@ -400,6 +403,7 @@ var _azdTags = { 'azd-env-name': environmentName }
 var _tags = union(_azdTags, deploymentTags)
 var _networkIsolation = empty(string(networkIsolation)) ? false : bool(networkIsolation)
 var _deployPrivateDnsZones = _networkIsolation && !policyManagedPrivateDns
+var _searchServiceLocation = empty(searchServiceLocation) ? location : searchServiceLocation
 
 
 // ----------------------------------------------------------------------
@@ -1932,20 +1936,20 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if
 //Search Service User Managed Identity
 resource searchServiceUAI 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (_useUAI && deploySearchService) {
   name: '${const.abbrs.security.managedIdentity}${searchServiceName}'
-  location: location
+  location: _searchServiceLocation
 }
 
 module searchService 'br/public:avm/res/search/search-service:0.11.1' = if (deploySearchService) {
   name: 'searchService'
   params: {
     name: searchServiceName
-    location: location
+    location: _searchServiceLocation
     publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
     tags: _tags
 
     // SKU & capacity
     sku: 'basic'
-    replicaCount: 2
+    replicaCount: 1
     partitionCount: 1
     semanticSearch: 'disabled'
 
@@ -1987,13 +1991,13 @@ module searchServiceAIFoundry 'br/public:avm/res/search/search-service:0.11.1' =
   name: 'searchServiceAIFoundry'
   params: {
     name: aiFoundrySearchServiceName
-    location: location
+    location: _searchServiceLocation
     publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
     tags: _tags
 
     // SKU & capacity (aligned with application search defaults; override for heavier workloads)
     sku: 'basic'
-    replicaCount: 2
+    replicaCount: 1
     partitionCount: 1
     semanticSearch: 'disabled'
 

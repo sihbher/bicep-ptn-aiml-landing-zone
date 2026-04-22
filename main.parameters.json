@@ -8,6 +8,7 @@
     "aiFoundryLocation":                   { "value": "${AZURE_AI_FOUNDRY_LOCATION}" },
     "psqlLocation":                        { "value": "${AZURE_PSQL_LOCATION}" },
     "cosmosLocation":                        { "value": "${AZURE_COSMOS_LOCATION}" },
+    "searchServiceLocation":                 { "value": "${AZURE_SEARCH_LOCATION}" },
     "deploymentTags":                      { "value": {} },
     "principalId":                         { "value": "${AZURE_PRINCIPAL_ID}" },
 
