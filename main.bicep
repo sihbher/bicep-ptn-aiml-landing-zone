@@ -206,6 +206,12 @@ param deploySubnets bool = true
 @description('Will deploy network security groups.')
 param deployNsgs bool = true
 
+@description('Deploy Azure Firewall with UDR for egress traffic control. Defaults to true when networkIsolation is enabled.')
+param deployAzureFirewall bool = true
+
+@description('List of trusted source IP CIDRs allowed to connect to the Bastion public IP on port 443. When empty, all internet inbound to port 443 is denied by default.')
+param bastionAllowedSourceIPs array = []
+
 @description('Will deploy network resources side by side with the Azure resources.')
 param sideBySideDeploy bool = true
 
@@ -352,7 +358,7 @@ param vmUserName string = ''
 param vmAdminPassword string
 
 @description('Size of the test VM')
-param vmSize string = 'Standard_D8s_v5'
+param vmSize string = 'Standard_D2s_v5'
 
 @description('Image SKU (e.g., win11-25h2-ent, win11-23h2-ent, 2022-datacenter).')
 param vmImageSku string = 'win11-25h2-ent'
@@ -475,12 +481,57 @@ var _useCAppAPIKey  = empty(string(useCAppAPIKey))? false : bool(useCAppAPIKey)
 // Networking
 ///////////////////////////////////////////////////////////////////////////
 
+// Bastion NSG — restricts inbound 443 to trusted IPs only
+module bastionNsg 'modules/networking/bastion-nsg.bicep' = if (deployVM && _networkIsolation && deployNsgs) {
+  name: 'bastionNsgDeployment'
+  params: {
+    name: 'nsg-${vnetName}-${azureBastionSubnetName}'
+    location: location
+    bastionAllowedSourceIPs: bastionAllowedSourceIPs
+  }
+}
+
+// Firewall FQDN allowlist for essential outbound connectivity
+#disable-next-line no-hardcoded-env-urls
+var _firewallEssentialAuthFqdns = ['login.microsoftonline.com', 'graph.microsoft.com']
+var _firewallEssentialContainerFqdns = ['mcr.microsoft.com', '*.data.mcr.microsoft.com']
+var _firewallEssentialGitHubFqdns = ['raw.githubusercontent.com', 'github.com', '*.github.com', '*.githubusercontent.com']
+#disable-next-line no-hardcoded-env-urls
+var _firewallVmSetupFqdns = [
+  'community.chocolatey.org'
+  '*.chocolatey.org'
+  'aka.ms'
+  'go.microsoft.com'
+  '*.core.windows.net'
+  '*.azureedge.net'
+  '*.nuget.org'
+  'update.code.visualstudio.com'
+  '*.vo.msecnd.net'
+  '*.vscode-cdn.net'
+  'download.docker.com'
+  'desktop.docker.com'
+  '*.python.org'
+  '*.pypi.org'
+  '*.applicationinsights.azure.com'
+]
+
+// Route Table for egress traffic control through Azure Firewall
+resource routeTable 'Microsoft.Network/routeTables@2024-07-01' = if (_networkIsolation) {
+  name: '${const.abbrs.networking.routeTable}${resourceToken}'
+  location: location
+  tags: _tags
+  properties: {
+    disableBgpRoutePropagation: true
+  }
+}
+
 // Base subnets that are always included
 var baseSubnets = [
       {
         name: agentSubnetName
         addressPrefix: agentSubnetPrefix 
         delegation: 'Microsoft.app/environments'
+        routeTableResourceId: routeTable.id
         serviceEndpoints: [
           'Microsoft.CognitiveServices'
         ]
@@ -488,6 +539,7 @@ var baseSubnets = [
       {
         name: peSubnetName
         addressPrefix: peSubnetPrefix 
+        routeTableResourceId: routeTable.id
         serviceEndpoints: [
           'Microsoft.AzureCosmosDB'
         ]        
@@ -501,7 +553,9 @@ var baseSubnets = [
       }
       {
         name: azureBastionSubnetName
-        addressPrefix: azureBastionSubnetPrefix 
+        addressPrefix: azureBastionSubnetPrefix
+        #disable-next-line BCP318
+        networkSecurityGroupResourceId: bastionNsg.outputs.id
         delegation: ''
         serviceEndpoints : []
       }
@@ -521,6 +575,7 @@ var baseSubnets = [
         name: jumpboxSubnetName
         addressPrefix: jumpboxSubnetPrefix 
         natGatewayResourceId: natGateway.id
+        routeTableResourceId: routeTable.id
         delegation: ''
         serviceEndpoints : []
       }
@@ -528,6 +583,7 @@ var baseSubnets = [
         name: acaEnvironmentSubnetName
         addressPrefix: acaEnvironmentSubnetPrefix  
         delegation: 'Microsoft.app/environments'
+        routeTableResourceId: routeTable.id
         serviceEndpoints: [
           'Microsoft.AzureCosmosDB'
         ]
@@ -535,6 +591,7 @@ var baseSubnets = [
       {
         name: devopsBuildAgentsSubnetName
         addressPrefix: devopsBuildAgentsSubnetPrefix 
+        routeTableResourceId: routeTable.id
         delegation: ''
         serviceEndpoints : []
       }
@@ -604,6 +661,162 @@ module testVmBastionHost 'br/public:avm/res/network/bastion-host:0.8.0' = if (de
     #disable-next-line BCP321
     useExistingVNet ? virtualNetworkSubnets : null
   ]
+}
+
+// Azure Firewall for egress traffic control
+///////////////////////////////////////////////////////////////////////////
+
+resource firewallPublicIp 'Microsoft.Network/publicIPAddresses@2024-07-01' = if (deployAzureFirewall && _networkIsolation) {
+  name: '${const.abbrs.networking.publicIPAddress}${const.abbrs.networking.firewall}${resourceToken}'
+  location: location
+  sku: {
+    name: 'Standard'
+    tier: 'Regional'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+    publicIPAddressVersion: 'IPv4'
+  }
+  tags: _tags
+}
+
+resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-07-01' = if (deployAzureFirewall && _networkIsolation) {
+  name: '${const.abbrs.networking.firewallPolicy}${resourceToken}'
+  location: location
+  tags: _tags
+  properties: {
+    sku: {
+      tier: 'Standard'
+    }
+    threatIntelMode: 'Alert'
+  }
+}
+
+resource firewallPolicyDefaultRuleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2024-07-01' = if (deployAzureFirewall && _networkIsolation) {
+  parent: firewallPolicy
+  name: 'DefaultRuleCollectionGroup'
+  properties: {
+    priority: 200
+    ruleCollections: [
+      {
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        name: 'AllowEssentialOutbound'
+        priority: 100
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'ApplicationRule'
+            name: 'AllowMicrosoftContainerRegistry'
+            protocols: [
+              { protocolType: 'Https', port: 443 }
+            ]
+            targetFqdns: _firewallEssentialContainerFqdns
+            sourceAddresses: ['*']
+          }
+          {
+            ruleType: 'ApplicationRule'
+            name: 'AllowEntraIdAuth'
+            protocols: [
+              { protocolType: 'Https', port: 443 }
+            ]
+            targetFqdns: _firewallEssentialAuthFqdns
+            sourceAddresses: ['*']
+          }
+          {
+            ruleType: 'ApplicationRule'
+            name: 'AllowGitHub'
+            protocols: [
+              { protocolType: 'Https', port: 443 }
+            ]
+            targetFqdns: _firewallEssentialGitHubFqdns
+            sourceAddresses: ['*']
+          }
+          {
+            ruleType: 'ApplicationRule'
+            name: 'AllowVmSetup'
+            protocols: [
+              { protocolType: 'Https', port: 443 }
+              { protocolType: 'Http', port: 80 }
+            ]
+            targetFqdns: _firewallVmSetupFqdns
+            sourceAddresses: ['*']
+          }
+        ]
+      }
+    ]
+  }
+}
+
+#disable-next-line BCP318
+var _firewallSubnetId = _networkIsolation ? '${virtualNetworkResourceId}/subnets/${azureFirewallSubnetName}' : ''
+
+resource azureFirewall 'Microsoft.Network/azureFirewalls@2024-07-01' = if (deployAzureFirewall && _networkIsolation) {
+  name: '${const.abbrs.networking.firewall}${resourceToken}'
+  location: location
+  tags: _tags
+  properties: {
+    sku: {
+      name: 'AZFW_VNet'
+      tier: 'Standard'
+    }
+    ipConfigurations: [
+      {
+        name: 'ipconfig1'
+        properties: {
+          publicIPAddress: {
+            id: firewallPublicIp.id
+          }
+          subnet: {
+            id: _firewallSubnetId
+          }
+        }
+      }
+    ]
+    firewallPolicy: {
+      id: firewallPolicy.id
+    }
+  }
+  dependsOn: [
+    #disable-next-line BCP321
+    !useExistingVNet ? virtualNetwork : null
+    #disable-next-line BCP321
+    useExistingVNet ? virtualNetworkSubnets : null
+  ]
+}
+
+// Default route through Azure Firewall
+resource defaultRoute 'Microsoft.Network/routeTables/routes@2024-07-01' = if (deployAzureFirewall && _networkIsolation) {
+  parent: routeTable
+  name: 'default-to-firewall'
+  properties: {
+    addressPrefix: '0.0.0.0/0'
+    nextHopType: 'VirtualAppliance'
+    nextHopIpAddress: azureFirewall!.properties.ipConfigurations[0].properties.privateIPAddress
+  }
+}
+
+// Azure Firewall diagnostics to Log Analytics
+resource firewallDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (deployAzureFirewall && _networkIsolation && deployLogAnalytics) {
+  name: 'fw-diagnostics'
+  scope: azureFirewall
+  properties: {
+    #disable-next-line BCP318
+    workspaceId: logAnalytics.outputs.resourceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
 }
 
 //AI Foundry Search User Managed Identity
@@ -1000,7 +1213,7 @@ resource cse 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' = if (dep
     type: 'CustomScriptExtension'
     typeHandlerVersion: '1.10'
     autoUpgradeMinorVersion: true
-    forceUpdateTag: 'alwaysRun'
+    forceUpdateTag: deployment().name
     settings: {
       fileUris: _fileUris
       commandToExecute: 'powershell.exe -ExecutionPolicy Unrestricted -File install.ps1 -release ${_manifest.ailz_tag} -UseUAI ${_useUAI} -ResourceToken ${resourceToken} -AzureTenantId ${subscription().tenantId} -AzureLocation ${location} -AzureSubscriptionId ${subscription().subscriptionId} -AzureResourceGroupName ${resourceGroup().name} -AzdEnvName ${environmentName}'
@@ -1021,6 +1234,8 @@ resource cse 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' = if (dep
     assignCognitiveServicesContributorTestVm
     assignStorageStorageBlobDataContributorTestVm
     assignCosmosDBCosmosDbBuiltInDataContributorTestVm
+    azureFirewall
+    firewallPolicyDefaultRuleCollectionGroup
   ]
 }
 
@@ -1464,6 +1679,33 @@ module aiFoundryUAI 'br/public:avm/res/managed-identity/user-assigned-identity:0
   }
 }
 
+// 16.0 Pre-create AI Services account to avoid PE race condition in AVM module.
+// The AVM creates the CogSvc account and its PE in the same deployment, causing
+// the PE to fail with AccountProvisioningStateInvalid when the account is still
+// in "Accepted" state. By pre-creating the account here, the AVM's subsequent PUT
+// is an idempotent update on an already-provisioned resource, so the PE succeeds.
+resource aiServicesAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' = if (deployAiFoundry) {
+  name: aiFoundryAccountName
+  location: location
+  tags: deploymentTags
+  kind: 'AIServices'
+  identity: {
+    type: 'SystemAssigned'
+  }
+  sku: {
+    name: 'S0'
+  }
+  properties: {
+    customSubDomainName: aiFoundryAccountName
+    disableLocalAuth: true
+    publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
 // 16.1 AI Foundry Configuration
 module aiFoundry 'modules/ai-foundry/main.bicep' = if (deployAiFoundry) {
   name: '${aiFoundryAccountName}-${resourceToken}-deployment'
@@ -1518,7 +1760,7 @@ module aiFoundry 'modules/ai-foundry/main.bicep' = if (deployAiFoundry) {
             name: 'text-embedding-3-large'
             sku: {
               name: 'Standard'
-              capacity: 40
+              capacity: 10
             }
           }
         ]
@@ -1551,6 +1793,7 @@ module aiFoundry 'modules/ai-foundry/main.bicep' = if (deployAiFoundry) {
     _networkIsolation ? privateDnsZoneCosmos : null
     #disable-next-line BCP321
     _networkIsolation ? privateDnsZoneKeyVault : null
+    aiServicesAccount
   ]
 }
 
@@ -1560,14 +1803,16 @@ var varPeSubnetId = empty(existingVnetResourceId!)
   : '${existingVnetResourceId!}/subnets/pe-subnet'
 
 var varAfNetworkingOverride = _networkIsolation ? {
-  agentServiceSubnetResourceId: deployAiFoundrySubnet ? _agentSubnetId : null
   cognitiveServicesPrivateDnsZoneResourceId: _dnsZoneCogSvcsId
   openAiPrivateDnsZoneResourceId: _dnsZoneOpenAiId
   aiServicesPrivateDnsZoneResourceId: _dnsZoneAiServicesId
+  agentServiceSubnetResourceId: deployAiFoundrySubnet ? _agentSubnetId : null
 } : null
 
 var varAfAiSearchCfgComplete = {
-  existingResourceId: aiSearchResourceId != '' ? aiSearchResourceId : null
+  existingResourceId: aiSearchResourceId != ''
+    ? aiSearchResourceId
+    : deploySearchService ? searchService.outputs.resourceId : null
   name: aiFoundrySearchServiceName
   privateDnsZoneResourceId: _networkIsolation ? _dnsZoneSearchId : null
   roleAssignments: []
@@ -2145,9 +2390,10 @@ module searchService 'br/public:avm/res/search/search-service:0.11.1' = if (depl
     tags: _tags
 
     // SKU & capacity
-    sku: 'standard'
-    replicaCount: 1
-    semanticSearch: enableAgenticRetrieval ? 'standard' : 'disabled'
+    sku: 'basic'
+    replicaCount: 2
+    partitionCount: 1
+    semanticSearch: 'disabled'
 
     // Identity & Auth
     managedIdentities: {
@@ -2764,25 +3010,11 @@ module assignSearchSearchIndexDataReaderAIFoundryProject 'modules/security/resou
   }
 }
 
-// Search Service - Search Service Contributor -> AiFoundryProject
-module assignSearchSearchServiceContributorAIFoundryProject 'modules/security/resource-role-assignment.bicep' = if (deployAiFoundry && deploySearchService) {
-  name: 'assignSearchSearchServiceContributorAIFoundryProject'
-  params: {
-    name: 'assignSearchSearchServiceContributorAIFoundryProject'
-    roleAssignments: [
-      {
-        principalId: aiFoundry!.outputs.aiProjectPrincipalId
-        roleDefinitionId: subscriptionResourceId(
-          'Microsoft.Authorization/roleDefinitions',
-          const.roles.SearchServiceContributor.guid
-        )
-        #disable-next-line BCP318
-        resourceId: searchService.outputs.resourceId
-        principalType: 'ServicePrincipal'
-      }
-    ]
-  }
-}
+// NOTE: Search Service Contributor for the AI Foundry Project identity on the
+// Search service is already created by the AVM AI Foundry module (avm/ptn/ai-ml/ai-foundry)
+// when aiSearchConfiguration is provided. Creating it again here causes a
+// RoleAssignmentExists conflict because both produce the same deterministic GUID.
+// Intentionally omitted.
 
 // Storage Account - Storage Blob Data Reader -> AiFoundry Project
 module assignStorageStorageBlobDataReaderAIFoundryProject 'modules/security/resource-role-assignment.bicep' = if (deployAiFoundry && deployStorageAccount) {
@@ -2802,9 +3034,6 @@ module assignStorageStorageBlobDataReaderAIFoundryProject 'modules/security/reso
       }
     ]
   }
-  dependsOn: [
-    assignSearchSearchServiceContributorAIFoundryProject
-  ]
 }
 
 //////////////////////////////////////////////////////////////////////////

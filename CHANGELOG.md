@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.0.9] - 2026-04-22
+### Added
+- **Default Bastion NSG** (fixes #8): Dedicated NSG on the `AzureBastionSubnet` that denies all internet inbound on port 443 by default. Operators add trusted source IPs via the new `bastionAllowedSourceIPs` parameter. All required Bastion control-plane rules (GatewayManager, AzureLoadBalancer, BastionHostCommunication) are included. New module `modules/networking/bastion-nsg.bicep`.
+- **Default Azure Firewall + UDR** (fixes #9): Azure Firewall with a Standard firewall policy and a route table that forces `0.0.0.0/0` egress through the firewall for workload subnets. Includes essential outbound FQDN rules (MCR, Entra ID) and diagnostics wired to Log Analytics. Enabled by default when network isolation is active.
+- **Standalone AI Services account resource**: Pre-creates the `Microsoft.CognitiveServices/accounts` resource before the AVM `ai-foundry` module runs, with `dependsOn` wiring on the `aiFoundry` module. This permanently eliminates the `AccountProvisioningStateInvalid` race condition where the AVM module would attempt to create the AI Services private endpoint while the account was still in `Accepted` provisioning state.
+
+### Changed
+- **Cost optimization — Azure AI Search defaults** (fixes #11): Search service defaults changed to `sku: 'basic'`, `replicaCount: 2`, `partitionCount: 1`. This follows Azure AI Search reliability guidance (minimum 2 replicas for query workloads) while significantly reducing default cost. SKU, replica, and partition settings remain overridable for larger workloads.
+- **Cost optimization — Jumpbox VM default** (fixes #11): Default `vmSize` changed from `Standard_D8s_v5` (8 vCPU / 32 GiB) to `Standard_D2s_v5` (2 vCPU / 8 GiB). Same Dsv5 general-purpose family, right-sized for the jumpbox admin/bootstrap role. Override remains available for heavier use cases.
+- Estimated combined cost reduction from the above: ~$1,359/month (~$16.3k/year) for default deployments.
+
+### Fixed
+- **`RoleAssignmentExists` deployment failure**: Removed the custom `assignSearchSearchServiceContributorAIFoundryProject` module from `main.bicep`. The AVM `ai-foundry` module already creates this role assignment (Search Service Contributor on the Search service for the AI Foundry Project identity) internally with the same deterministic GUID, causing a conflict on deployment. Cleaned up the downstream `dependsOn` accordingly.
+
 ## [v1.0.8] - 2026-04-16
 ### Added
 - New parameter `policyManagedPrivateDns` (`bool`, default `false`) to skip Private DNS Zone and DNS zone group creation. Use this in environments where Azure Policy manages Private DNS Zone linking (e.g., CAF Enterprise-Scale Platform Landing Zone). (PR #4, fixes #2)

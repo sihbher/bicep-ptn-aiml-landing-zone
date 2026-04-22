@@ -32,6 +32,8 @@
     "deployContainerRegistry":              { "value": "true" },
     "deployContainerEnv":                   { "value": "true" },
     "deployNsgs":                           { "value": "true" },
+    "deployAzureFirewall":                  { "value": "${DEPLOY_AZURE_FIREWALL}" },
+    "bastionAllowedSourceIPs":              { "value": [] },
     "deployMcp":                            { "value": "true" },
     "deployGroundingWithBing":              { "value": "false" },
     "deployKeyVault":                       { "value": "true" },
@@ -68,7 +70,7 @@
     "solutionStorageAccountName":            { "value": null },
 
     "vmAdminPassword":                       {"value": "$(secretOrRandomPassword)"},  
-    "vmSize":                                { "value": "Standard_D8s_v5" },
+    "vmSize":                                { "value": "Standard_D2s_v5" },
 
     "useCMK":                                { "value": "false" },
     "useExistingVNet":                       { "value": "${USE_EXISTING_VNET}" },  
@@ -101,7 +103,7 @@
           },
           "sku": {
             "name": "Standard",
-            "capacity": 40
+            "capacity": 10
           },
           "canonical_name": "EMBEDDING_DEPLOYMENT_NAME",
           "apiVersion": "2025-12-01-preview"
