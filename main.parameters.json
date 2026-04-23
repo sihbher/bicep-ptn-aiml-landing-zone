@@ -43,7 +43,7 @@
     "deploySearchService":                  { "value": "true" },
     "deployStorageAccount":                 { "value": "true" },
     "greenFieldDeployment":                 { "value": "true" },
-    "deployVM":                             { "value": "true" },
+    "deployVM":                             { "value": "${DEPLOY_VM=true}" },
     "deploySoftware":                       { "value": "true" },
     "deployPostgres":                       { "value": "false" },
 
@@ -71,7 +71,7 @@
     "solutionStorageAccountName":            { "value": null },
 
     "vmAdminPassword":                       {"value": "$(secretOrRandomPassword)"},  
-    "vmSize":                                { "value": "Standard_D2s_v5" },
+    "vmSize":                                { "value": "${AZURE_VM_SIZE=Standard_D2s_v3}" },
 
     "useCMK":                                { "value": "false" },
     "useExistingVNet":                       { "value": "${USE_EXISTING_VNET}" },  

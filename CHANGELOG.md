@@ -26,6 +26,11 @@ This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres 
 ### Fixed
 - **`RoleAssignmentExists` deployment failure**: Removed the custom `assignSearchSearchServiceContributorAIFoundryProject` module from `main.bicep`. The AVM `ai-foundry` module already creates this role assignment (Search Service Contributor on the Search service for the AI Foundry Project identity) internally with the same deterministic GUID, causing a conflict on deployment. Cleaned up the downstream `dependsOn` accordingly.
 - **`RequestContentTooLarge` on `azd provision`**: Compiled template size now 3.98 MB, under the 4 MB ARM limit (see the template size optimization entry above).
+- **Network-isolation provisioning failures**:
+  - **App Configuration Forbidden on `keyValues` writes under NI**: `appConfigPopulate` and `cosmosConfigKeyVaultPopulate` are now gated with `!_networkIsolation` to avoid ARM data-plane writes against an App Configuration store with `publicNetworkAccess: 'Disabled'` (writes require an ARM private link path not provisioned by this template).
+  - **App Configuration `dataPlaneProxy.privateLinkDelegation`** now set to `'Enabled'` when `_networkIsolation` is true (required by API `2024-05-01` when `publicNetworkAccess` is `Disabled`).
+  - **`InvalidTemplate: bastionNsgDeployment requires an API version`** when `deployVM=false`: made the `networkSecurityGroupResourceId` reference in the VNet `baseSubnets` null-safe using `bastionNsg!.outputs.id` gated on `(deployVM && _networkIsolation && deployNsgs)`.
+  - **Jumpbox VM `OSProvisioningTimedOut`**: default `vmSize` changed to `Standard_D2s_v3` (v5 family unavailable in several regions incl. East US 2) and `deployVM` is now controllable via the `DEPLOY_VM` azd env var (`${DEPLOY_VM=true}`) so operators can opt out in subscriptions where Azure Policy auto-installs the `AzurePolicyforWindows` extension and blocks OS provisioning.
 
 ## [v1.0.8] - 2026-04-16
 ### Added

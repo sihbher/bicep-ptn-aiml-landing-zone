@@ -559,7 +559,7 @@ var baseSubnets = [
         name: azureBastionSubnetName
         addressPrefix: azureBastionSubnetPrefix
         #disable-next-line BCP318
-        networkSecurityGroupResourceId: bastionNsg.outputs.id
+        networkSecurityGroupResourceId: (deployVM && _networkIsolation && deployNsgs) ? bastionNsg!.outputs.id : ''
         delegation: ''
         serviceEndpoints : []
       }
@@ -2569,7 +2569,7 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' =
   properties: {
     dataPlaneProxy: {
       authenticationMode: 'Pass-through'
-      privateLinkDelegation: 'Disabled'
+      privateLinkDelegation: _networkIsolation ? 'Enabled' : 'Disabled'
     }
     publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
     disableLocalAuth: false
@@ -2668,7 +2668,7 @@ module appConfigKeyVaultPopulate 'modules/app-configuration/app-configuration.bi
   }
 }
 
-module cosmosConfigKeyVaultPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployCosmosDb && deployAppConfig) {
+module cosmosConfigKeyVaultPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployCosmosDb && deployAppConfig && !_networkIsolation) {
   name: 'cosmosConfigKeyVaultPopulate'
   params: {
     #disable-next-line BCP318
@@ -2684,7 +2684,7 @@ module cosmosConfigKeyVaultPopulate 'modules/app-configuration/app-configuration
   }
 }
 
-module appConfigPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployAppConfig) {
+module appConfigPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployAppConfig && !_networkIsolation) {
   name: 'appConfigPopulate'
   params: {
     #disable-next-line BCP318
