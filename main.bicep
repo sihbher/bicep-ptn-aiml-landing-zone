@@ -599,10 +599,20 @@ var _firewallEditorFqdns = [
 
 // ACR Tasks agent-pool FQDNs — scoped to devopsBuildAgentsSubnetPrefix. Only
 // populated when the agent pool is actually deployed.
+//
+// Note: ACR Tasks agents need egress to ACR data plane (`*.azurecr.io`,
+// `*.data.azurecr.io`) AND to the Azure Storage queue/blob/table endpoints
+// the ACR Tasks control plane uses to dispatch jobs to the agent VM.
+// Without the *.core.windows.net FQDNs, builds queued via
+// `az acr build --agent-pool` hang indefinitely in `Queued` state because
+// the agent VM cannot reach the storage queue. See issue #18.
 var _deployAcrTaskAgentPool = deployContainerRegistry && _networkIsolation && deployAcrTaskAgentPool
 var _firewallAcrTaskFqdns = _deployAcrTaskAgentPool ? [
   '*.azurecr.io'
   '*.data.azurecr.io'
+  '*.blob.${environment().suffixes.storage}'
+  '*.queue.${environment().suffixes.storage}'
+  '*.table.${environment().suffixes.storage}'
 ] : []
 
 // Route Table for egress traffic control through Azure Firewall
