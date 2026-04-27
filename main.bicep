@@ -236,6 +236,15 @@ param extendFirewallForJumpboxBootstrap bool = true
 @description('When true, extends the Azure Firewall Policy with the FQDN allow-list required for ACR Tasks builds running inside the build-agents subnet to fetch language packages (npm, PyPI) and OS packages (Debian/Ubuntu apt repos, yarn). Only effective when networkIsolation, deployAzureFirewall and deployAcrTaskAgentPool are all enabled. Disable if you manage egress centrally or pre-bake all dependencies into the builder base image.')
 param extendFirewallForAcrTaskBuilds bool = true
 
+@description('Optional. Additional Git repository URLs to clone onto the jumpbox under C:\\github\\ during install.ps1 bootstrap. Useful for downstream solution accelerators that need their app repo present for private-network data-plane post-provisioning (Cosmos seeding, AI Search index creation, etc.). Forwarded to install.ps1 as a comma-separated string.')
+param extraRepoUrls string[] = []
+
+@description('Optional. Git refs (tags/branches) to check out for each entry in extraRepoUrls. When shorter than extraRepoUrls or an entry is empty, defaults to "main". Forwarded to install.ps1 as a comma-separated string.')
+param extraRepoTags string[] = []
+
+@description('Optional. Local folder names under C:\\github\\ for each entry in extraRepoUrls. When shorter than extraRepoUrls or an entry is empty, defaults to the repo URL basename without the .git suffix. Forwarded to install.ps1 as a comma-separated string.')
+param extraRepoNames string[] = []
+
 @description('List of trusted source IP CIDRs allowed to connect to the Bastion public IP on port 443. When empty, all internet inbound to port 443 is denied by default.')
 param bastionAllowedSourceIPs array = []
 
@@ -1230,7 +1239,7 @@ resource cse 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' = if (dep
     forceUpdateTag: deployment().name
     settings: {
       fileUris: _fileUris
-      commandToExecute: 'powershell.exe -ExecutionPolicy Unrestricted -File install.ps1 -release ${_manifest.ailz_tag} -UseUAI ${_useUAI} -ResourceToken ${resourceToken} -AzureTenantId ${subscription().tenantId} -AzureLocation ${location} -AzureSubscriptionId ${subscription().subscriptionId} -AzureResourceGroupName ${resourceGroup().name} -AzdEnvName ${environmentName}'
+      commandToExecute: 'powershell.exe -ExecutionPolicy Unrestricted -File install.ps1 -release ${_manifest.ailz_tag} -UseUAI ${_useUAI} -ResourceToken ${resourceToken} -AzureTenantId ${subscription().tenantId} -AzureLocation ${location} -AzureSubscriptionId ${subscription().subscriptionId} -AzureResourceGroupName ${resourceGroup().name} -AzdEnvName ${environmentName} -ExtraRepoUrls "${join(extraRepoUrls, ',')}" -ExtraRepoTags "${join(extraRepoTags, ',')}" -ExtraRepoNames "${join(extraRepoNames, ',')}"'
     }
     protectedSettings: {
       

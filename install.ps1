@@ -20,7 +20,20 @@ Param (
   [string] $azureLocation,
   [string] $AzdEnvName,
   [string] $resourceToken,
-  [string] $useUAI 
+  [string] $useUAI,
+
+  # Optional: additional Git repositories to clone into C:\github\ on the
+  # jumpbox. Useful for downstream solution accelerators that consume this
+  # landing zone as a Bicep module / git submodule and need their own app
+  # repository present on the VM for post-provisioning data-plane scripts.
+  # Pass as comma-separated strings (CSE command-line friendly):
+  #   -ExtraRepoUrls  "https://github.com/org/repo-a.git,https://github.com/org/repo-b.git"
+  #   -ExtraRepoTags  "v1.0.0,main"
+  #   -ExtraRepoNames "repo-a,repo-b"
+  # Tags default to "main"; names default to the repo URL basename.
+  [string] $ExtraRepoUrls  = '',
+  [string] $ExtraRepoTags  = '',
+  [string] $ExtraRepoNames = ''
 )
 
 Start-Transcript -Path C:\WindowsAzure\Logs\CMFAI_CustomScriptExtension.txt -Append
@@ -229,6 +242,41 @@ foreach ($repo in $manifest.components) {
     }
 
     git config --global --add safe.directory "C:/github/$repoName"
+}
+
+# ------------------------------
+# Clone extra repos passed by downstream consumers via -ExtraRepoUrls
+# ------------------------------
+# Additive extension point for downstream accelerators (e.g. GPT-RAG,
+# live-voice-practice) that consume this landing zone as a Bicep module / git
+# submodule and need their own application repository present on the jumpbox
+# for private-network data-plane post-provisioning. See issue #21.
+if (-not [string]::IsNullOrWhiteSpace($ExtraRepoUrls)) {
+    $extraUrls  = $ExtraRepoUrls  -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    $extraTags  = if ([string]::IsNullOrWhiteSpace($ExtraRepoTags))  { @() } else { $ExtraRepoTags  -split ',' | ForEach-Object { $_.Trim() } }
+    $extraNames = if ([string]::IsNullOrWhiteSpace($ExtraRepoNames)) { @() } else { $ExtraRepoNames -split ',' | ForEach-Object { $_.Trim() } }
+
+    for ($i = 0; $i -lt $extraUrls.Count; $i++) {
+        $url  = $extraUrls[$i]
+        $tag  = if ($i -lt $extraTags.Count  -and $extraTags[$i])  { $extraTags[$i]  } else { 'main' }
+        $name = if ($i -lt $extraNames.Count -and $extraNames[$i]) { $extraNames[$i] } else { (($url -split '/')[-1]) -replace '\.git$','' }
+
+        if (Test-Path "C:\github\$name") {
+            write-host "Updating existing extra repository: $name"
+            cd "C:\github\$name"
+            git fetch --all
+            git checkout $tag
+        }
+        else {
+            write-host "Cloning extra repository: $name ($tag) from $url"
+            git clone -b $tag --depth 1 $url "C:\github\$name"
+            if (Test-Path "C:\github\$name") {
+                copy-item C:\github\ai-lz\.azure "C:\github\$name" -recurse -force
+            }
+        }
+
+        git config --global --add safe.directory "C:/github/$name"
+    }
 }
 
 # Reboot to finalize Chocolatey-installed tools (Git, Python, VS Code, PowerShell Core)

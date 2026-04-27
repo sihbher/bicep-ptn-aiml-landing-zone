@@ -89,6 +89,23 @@ azd provision
 
 2. **Connect via Azure Bastion**
 
+#### Cloning extra repositories onto the jumpbox
+
+The default `install.ps1` bootstrap clones this repository to `C:\github\ai-lz` and walks `manifest.json#components` for additional repos. That path requires forking `install.ps1`, which is rarely what consumers want. Downstream solution accelerators that consume this landing zone as a Bicep module / git submodule and need their own application repository present on the jumpbox (for private-network data-plane post-provisioning — Cosmos seeding, AI Search index creation, sample data loading, etc.) can use the additive `extraRepoUrls` / `extraRepoTags` / `extraRepoNames` parameters instead:
+
+```bicep
+module aiml 'br/public:avm/ptn/aiml/ai-landing-zone:1.1.1' = {
+  params: {
+    // ...existing params...
+    extraRepoUrls:  [ 'https://github.com/Contoso/voice-app.git' ]
+    extraRepoTags:  [ 'v0.3.0' ]                  // optional; defaults to "main"
+    extraRepoNames: [ 'voice-app' ]               // optional; defaults to repo basename
+  }
+}
+```
+
+Each entry is forwarded to `install.ps1` and cloned into `C:\github\<name>` on the jumpbox alongside `ai-lz`. The arrays are positional: index `i` of `extraRepoUrls` pairs with index `i` of `extraRepoTags` and `extraRepoNames`. Existing `manifest.components` behavior is preserved — `extraRepoUrls` is purely additive.
+
 #### Building and pushing images with network isolation
 
 When `networkIsolation=true`, the Container Registry is deployed as **Premium** with `publicNetworkAccess=Disabled` and is only reachable via its private endpoint. `az acr build` against the shared Microsoft-managed builder will fail. This landing zone therefore provisions an **ACR Tasks agent pool** attached to the `devops-build-agents-subnet` so image builds run inside the VNet and push to the registry over its private endpoint. No Docker client is required (and the jumpbox has no Docker installed by design — see issue #14).
