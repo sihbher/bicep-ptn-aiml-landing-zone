@@ -59,32 +59,61 @@ $env:Path += ";C:\ProgramData\chocolatey\bin"
 
 
 # ------------------------------
-# Install tooling
+# Install tooling (parallel via Start-Job — see issue #24)
 # ------------------------------
-write-host "Installing Visual Studio Code"
-choco upgrade vscode -y --ignoredetectedreboot --force
+# Run the six independent installs (vscode, azure-cli, git, python311,
+# powershell-core, azd) concurrently as background jobs so the CSE wall time
+# becomes max(slowest-package) instead of sum-of-all. Net savings on a clean
+# network-isolated provision: ~10–15 minutes.
+#
+# Notes:
+#   * Using built-in `Start-Job` (not `Start-ThreadJob`) on purpose:
+#     `ThreadJob` is NOT bundled with PowerShell 5.1 and would require an
+#     `Install-Module` from PSGallery — which would force adding
+#     `*.powershellgallery.com` to the firewall allowlist and a new failure
+#     mode under network isolation. `Start-Job` spawns one child
+#     `powershell.exe` per job (~1–2 s each), which is negligible against
+#     `choco install` steps that take minutes. See issue #24.
+#   * AZD is installed via `choco install azd` instead of `aka.ms/install-azd.ps1`
+#     so it can be parallelized with the rest. The path-discovery block below
+#     still searches the legacy MSI locations as a fallback in case the
+#     chocolatey package layout changes.
+#   * Notepad++ was dropped — not used by any downstream automation.
+#   * Quiet flags (`--no-progress --limitoutput --no-color`) cut log/console
+#     overhead. `--ignoredetectedreboot --force` preserves existing behavior
+#     (the script ends with a delayed reboot, see bottom of file).
+$chocoArgs = @('-y','--ignoredetectedreboot','--force','--no-progress','--limitoutput','--no-color')
 
-write-host "Installing Azure CLI"
-choco install azure-cli -y --ignoredetectedreboot --force
+Write-Host "Starting parallel choco installs (vscode, azure-cli, git, python311, powershell-core, azd)..."
+$jobs = @(
+    Start-Job -Name vscode      -ScriptBlock { & choco upgrade vscode          @using:chocoArgs }
+    Start-Job -Name azure-cli   -ScriptBlock { & choco install azure-cli       @using:chocoArgs }
+    Start-Job -Name git         -ScriptBlock { & choco upgrade git             @using:chocoArgs }
+    Start-Job -Name python311   -ScriptBlock { & choco install python311       @using:chocoArgs }
+    Start-Job -Name pwsh        -ScriptBlock { & choco install powershell-core @using:chocoArgs }
+    Start-Job -Name azd         -ScriptBlock { & choco install azd             @using:chocoArgs }
+)
 
-# Add Azure CLI to PATH immediately
-$env:PATH = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin;$env:PATH"
+$jobs | Wait-Job | Out-Null
+foreach ($job in $jobs) {
+    Write-Host "`n--- choco '$($job.Name)' output (state=$($job.State)) ---"
+    Receive-Job -Job $job
+    if ($job.State -ne 'Completed') {
+        Write-Warning "choco install '$($job.Name)' did not complete cleanly (state=$($job.State))."
+    }
+}
+$jobs | Remove-Job
+Write-Host "Parallel choco installs finished."
 
-
-write-host "Installing Git"
-choco upgrade git -y --ignoredetectedreboot --force
-$env:PATH = "C:\Program Files\Git\cmd;$env:PATH"
-
-
-write-host "Installing Python 3.11"
-choco install python311 -y --ignoredetectedreboot --force
-
-Write-Host "Installing AZD..."
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod 'https://aka.ms/install-azd.ps1' | Invoke-Expression"
+# Refresh PATH for the rest of this CSE run so the tools above are resolvable
+# without waiting for the post-CSE reboot.
+$env:PATH = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
 
 Write-Host "Searching for installed AZD executable..."
 
 $possibleAzdLocations = @(
+    "C:\ProgramData\chocolatey\bin\azd.exe",
+    "C:\ProgramData\chocolatey\lib\azd\tools\azd.exe",
     "C:\Program Files\Azure Dev CLI\azd.exe",
     "C:\Program Files (x86)\Azure Dev CLI\azd.exe",
     "C:\ProgramData\azd\bin\azd.exe",
@@ -146,15 +175,6 @@ try {
     Write-Host "Failed to update USER Path: $_" -ForegroundColor Yellow
 }
 
-
-# ------------------------------
-# Install PowerShell Core, Notepad++
-# ------------------------------
-write-host "Installing PowerShell Core"
-choco install powershell-core -y --ignoredetectedreboot --force
-
-write-host "Installing Notepad++"
-choco install notepadplusplus -y --ignoredetectedreboot --force
 
 # ------------------------------
 # Docker intentionally NOT installed on this jumpbox.
@@ -256,11 +276,26 @@ foreach ($repo in $manifest.components) {
 # Note: each split is wrapped in @(...) to force array context. Without it,
 # PowerShell 5.1 collapses a single-element pipeline result into a scalar
 # string, and `$arr[0]` then returns the FIRST CHARACTER of the URL/tag/name
-# instead of the value itself (issue #22 repro).
+# instead of the value itself (issues #22, #23 repro).
+#
+# Important: the @(...) MUST be on the right-hand side of a plain assignment.
+# In the form `$x = if (...) { @(...) } else { @(...) }`, the `if` is an
+# expression and PowerShell 5.1's pipeline output processor unwraps the
+# single-element result back to a scalar — that was the residual bug from
+# v1.1.1 caught in #23. So we use plain `if` statements with `@(...)` on
+# the assignment RHS instead of `if`-as-expression.
 if (-not [string]::IsNullOrWhiteSpace($ExtraRepoUrls)) {
-    $extraUrls  = @($ExtraRepoUrls  -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $extraTags  = if ([string]::IsNullOrWhiteSpace($ExtraRepoTags))  { @() } else { @($ExtraRepoTags  -split ',' | ForEach-Object { $_.Trim() }) }
-    $extraNames = if ([string]::IsNullOrWhiteSpace($ExtraRepoNames)) { @() } else { @($ExtraRepoNames -split ',' | ForEach-Object { $_.Trim() }) }
+    $extraUrls = @($ExtraRepoUrls -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    $extraTags = @()
+    if (-not [string]::IsNullOrWhiteSpace($ExtraRepoTags)) {
+        $extraTags = @($ExtraRepoTags -split ',' | ForEach-Object { $_.Trim() })
+    }
+
+    $extraNames = @()
+    if (-not [string]::IsNullOrWhiteSpace($ExtraRepoNames)) {
+        $extraNames = @($ExtraRepoNames -split ',' | ForEach-Object { $_.Trim() })
+    }
 
     for ($i = 0; $i -lt $extraUrls.Count; $i++) {
         $url  = $extraUrls[$i]

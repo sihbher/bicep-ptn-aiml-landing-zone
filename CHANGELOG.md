@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.1.2] - 2026-04-28
+
+### Fixed
+- **`install.ps1` PowerShell 5.1 scalar-collapse on single extra repo, second pass** (fixes #23): the v1.1.1 fix from #22 wrapped the array in `@(...)` but did so **inside** an `if/else` expression — `$x = if (...) { @(...) } else { @(...) }`. PowerShell 5.1's pipeline output processor unwraps the single-element result of the `if` expression back to a scalar at assignment time, so the `@(...)` inside the branch did not survive. With exactly one component in `manifest.json#components`, `$extraTags` and `$extraNames` were still strings, and `$extraTags[0]` returned `'m'` (the first character of `'main'`), causing `git clone -b m --depth 1 h` to fail silently. Rewrote both as plain `if` statements with `@(...)` on the right-hand side of a direct assignment, which is unambiguous under PS 5.1. Verified under `powershell.exe` (PS 5.1) with `$ExtraRepoTags = 'main'`: `$extraTags.GetType().Name -eq 'Object[]'` and `$extraTags[0] -eq 'main'`. The same shape that already worked for `$extraUrls` (assignment RHS, no `if`-as-expression).
+
+### Changed
+- **`install.ps1`: parallelize independent `choco install` steps with `Start-Job`** (fixes #24): the six tool installs (`vscode`, `azure-cli`, `git`, `python311`, `powershell-core`, `azd`) have no inter-dependencies and were running serially, taking 30–40 minutes of CSE wall time on a clean network-isolated provision (the dominant cost of `azd up` once everything else is healthy). Now run concurrently as background jobs; CSE wall time becomes max(slowest-package), expected ~17–22 minutes — savings of roughly 10–15 minutes. After `Wait-Job`, output is replayed serially per job to keep the CSE transcript readable. Job state is asserted and a `Write-Warning` is emitted for any non-`Completed` job so failures are visible in `C:\WindowsAzure\Logs\`. PATH is refreshed once after all jobs complete instead of per install.
+  - **Start-Job vs Start-ThreadJob**: `Start-Job` (built-in, spawns one child `powershell.exe` per job, ~1–2s each) was chosen over `Start-ThreadJob` because the latter is **not bundled with PowerShell 5.1** — it would require `Install-Module -Name ThreadJob` from PSGallery, forcing `*.powershellgallery.com` into the firewall allowlist and adding a new failure mode under network isolation. The ~6–12 s of process startup overhead is negligible against `choco install` steps that take minutes, and the parallelization works without any module dependency.
+- **`install.ps1`: install AZD via Chocolatey** (fixes #24): switched from `Invoke-RestMethod 'https://aka.ms/install-azd.ps1' | Invoke-Expression` to `choco install azd` so the AZD install can be parallelized with the other tools and uses the same package manager as the rest of the bootstrap. The existing AZD path-discovery block is preserved as a fallback in case the chocolatey package layout changes; `C:\ProgramData\chocolatey\bin\azd.exe` (the choco shim) and `C:\ProgramData\chocolatey\lib\azd\tools\azd.exe` were prepended to the candidate list.
+- **`install.ps1`: drop `notepadplusplus`** (fixes #24): not used by any downstream automation. Operators who want it can install it on demand from the Bastion session.
+- **`install.ps1`: add quiet flags to every `choco` invocation** (fixes #24): `--no-progress --limitoutput --no-color` cuts log/console overhead during parallel installs and keeps the CSE transcript scannable. `--ignoredetectedreboot --force` preserve existing behavior (the script ends with a delayed reboot).
+
 ## [v1.1.1] - 2026-04-26
 
 ### Added
