@@ -51,7 +51,14 @@ param enableTelemetry bool = true
 // Deploy AVM AI Foundry Module
 // ---------------------------------------------------------------------
 
-module aiFoundryAvm 'br/public:avm/ptn/ai-ml/ai-foundry:0.6.0' = {
+// Issue #26: this wrapper now points to a customized derivation of
+// avm/ptn/ai-ml/ai-foundry@0.6.0 maintained inside this repo
+// (`./foundry/`). The customization is limited to the `account` submodule,
+// which splits account creation from private-endpoint creation and adds an
+// explicit wait on `provisioningState == Succeeded`. All other behavior is
+// identical to the upstream AVM PTN at SHA 55178238674d0fc99dda39ac40d24bfebc4f5e0e.
+// See `modules/ai-foundry/foundry/modules/account.bicep` for details.
+module aiFoundryAvm './foundry/main.bicep' = {
   name: 'aiFoundryAvm-${baseName}'
   params: {
     baseName: baseName

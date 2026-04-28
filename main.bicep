@@ -1517,58 +1517,13 @@ resource aiFoundryUAI 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-
   location: location
 }
 
-// 16.0 Pre-create AI Services account to avoid PE race condition in AVM module.
-// The AVM (avm/ptn/ai-ml/ai-foundry) creates the CogSvc account AND its private
-// endpoint as part of the same nested deployment graph. On a clean deploy, the
-// AVM PUT mutates the account, moving it to "Accepted/Updating", and the child
-// PE PUT then fails with AccountProvisioningStateInvalid (surfaced as "already
-// exists or in a conflicting state").
-//
-// To break the race, this pre-create must converge to the SAME end-state the
-// AVM will PUT, so the AVM PUT becomes an idempotent no-op and the account
-// stays "Succeeded" when the PE is created. Properties below mirror what the
-// AVM cognitive-services/account submodule sets (see modules/account.bicep in
-// avm/ptn/ai-ml/ai-foundry).
-//
-// History:
-//   - PR #19 (v1.0.9) initially added `allowProjectManagement` AND a
-//     conditional `networkInjections` (scenario `agent`) to align with what
-//     we believed the AVM was setting.
-//   - Issue #25 (v1.1.2 regression): empirical evidence shows the AVM PUT
-//     does NOT include `networkInjections` in its body — observed account
-//     final state is `networkInjections: null` even when our pre-create
-//     requested an array. ARM PUT replace-semantics means AVM's PUT then
-//     wipes our networkInjections, mutating the account back to
-//     `Accepted/Updating` and re-triggering the PE race. The agent subnet
-//     is actually wired by the AVM submodule via
-//     `aiFoundryConfiguration.networking.agentServiceSubnetResourceId`
-//     (set below as `varAfNetworkingOverride.agentServiceSubnetResourceId`),
-//     not via a top-level `networkInjections` property on the account.
-//     So we drop `networkInjections` from the pre-create — restoring the
-//     #19 contract that AVM's PUT becomes a true no-op.
-resource aiServicesAccount 'Microsoft.CognitiveServices/accounts@2025-06-01' = if (deployAiFoundry) {
-  name: aiFoundryAccountName
-  location: location
-  tags: deploymentTags
-  kind: 'AIServices'
-  identity: {
-    type: 'SystemAssigned'
-  }
-  sku: {
-    name: 'S0'
-  }
-  properties: {
-    customSubDomainName: aiFoundryAccountName
-    disableLocalAuth: true
-    #disable-next-line BCP037
-    allowProjectManagement: deployAfProject
-    publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
-    networkAcls: {
-      defaultAction: 'Allow'
-      bypass: 'AzureServices'
-    }
-  }
-}
+// 16.0 AI Foundry account creation is delegated entirely to the customized
+// derivation of avm/ptn/ai-ml/ai-foundry@0.6.0 maintained at
+// `modules/ai-foundry/foundry/`. The customized `account.bicep` therein
+// splits account creation from private-endpoint creation and adds an
+// explicit deploymentScript wait on `provisioningState == Succeeded`, which
+// closes the race the previous pre-create workaround tried (and failed) to
+// mask via property-matching. See issues #25, #26, #27 for the full history.
 
 // Pre-create AI Foundry Storage Account with a region-safe SKU.
 // The AVM ai-foundry module (<= 0.6.0) creates its Storage Account with the
@@ -1672,7 +1627,6 @@ module aiFoundry 'modules/ai-foundry/main.bicep' = if (deployAiFoundry) {
     (_networkIsolation && useExistingVNet && deploySubnets) ? virtualNetworkSubnets : null
     #disable-next-line BCP321
     _networkIsolation ? privateDnsZones : null
-    aiServicesAccount
     #disable-next-line BCP321
     (aiFoundryStorageAccountResourceId == '') ? aiFoundryStorageAccount : null
   ]
