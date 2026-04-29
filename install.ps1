@@ -256,9 +256,13 @@ Write-Host "==============================================================`n" -F
 #
 # The `Start-Job` child has no TTY, so Git Credential Manager can stall on
 # discovery prompts that never resolve (#33 Bug A). We therefore force
-# `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=Never`, and disable
-# `credential.helper` for this child invocation. Cold-start TLS on freshly
-# booted NI VMs (Defender + post-choco) can take >60 s to complete the first
+# `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=Never`, and pass
+# `-c credential.helper=` on the `git` command line to disable GCM for this
+# one-shot invocation. (The earlier `GIT_CONFIG_COUNT/KEY_0/VALUE_0` env-var
+# protocol approach was non-functional on Windows — PowerShell's
+# `$env:VAR = ''` *deletes* the variable rather than setting it empty, so git
+# aborted with `missing config value GIT_CONFIG_VALUE_0` before any network
+# I/O — see #34.) Cold-start TLS on freshly booted NI VMs (Defender +post-choco) can take >60 s to complete the first
 # byte, so `GIT_HTTP_LOW_SPEED_TIME` is loosened to 180 s and the wall clock
 # to 900 s (#33 Bug B). The real `git` exit code is captured via a sentinel
 # line in the job's output stream, with a `.git` directory existence
@@ -284,17 +288,19 @@ function Invoke-GitCloneWithTimeout {
         $job = Start-Job -ScriptBlock {
             param($u, $t, $d, $lim, $tsec)
             # No TTY in Start-Job: silence any chance of an interactive prompt.
-            $env:GIT_TERMINAL_PROMPT = '0'
-            $env:GCM_INTERACTIVE     = 'Never'
-            # Disable Git Credential Manager for this public-clone path.
-            # Avoids GCM discovery RTTs that can stall a cold TLS in NI subnets.
-            $env:GIT_CONFIG_COUNT     = '1'
-            $env:GIT_CONFIG_KEY_0     = 'credential.helper'
-            $env:GIT_CONFIG_VALUE_0   = ''
+            $env:GIT_TERMINAL_PROMPT      = '0'
+            $env:GCM_INTERACTIVE          = 'Never'
             # Abort only on truly stuck transfers, not on cold TLS startup.
             $env:GIT_HTTP_LOW_SPEED_LIMIT = "$lim"
             $env:GIT_HTTP_LOW_SPEED_TIME  = "$tsec"
-            & git clone -b $t --depth 1 --no-tags $u $d 2>&1
+            # Disable Git Credential Manager for this public-clone path via
+            # `-c credential.helper=` (one-shot empty value for this invocation
+            # only). The previous GIT_CONFIG_* env-var protocol approach (#33)
+            # was non-functional on Windows because PowerShell's `$env:VAR = ''`
+            # *deletes* the variable instead of setting it to empty, so git
+            # aborted with `missing config value GIT_CONFIG_VALUE_0` before any
+            # network I/O. The `-c` flag avoids that footgun entirely (#34).
+            & git -c credential.helper= clone -b $t --depth 1 --no-tags $u $d 2>&1
             "__GIT_EXIT__:$LASTEXITCODE"   # surface the real exit code
         } -ArgumentList $Url, $Tag, $Destination, $LowSpeedLimitBps, $LowSpeedTimeSec
 
