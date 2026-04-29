@@ -59,41 +59,32 @@ $env:Path += ";C:\ProgramData\chocolatey\bin"
 
 
 # ------------------------------
-# Install tooling (parallel via Start-Job — see issue #24, hardened in #30)
+# Install tooling (sequential — see issues #24, #30, #31)
 # ------------------------------
-# Run the six independent installs (vscode, azure-cli, git, python311,
-# powershell-core, azd) concurrently as background jobs so the CSE wall time
-# becomes max(slowest-package) instead of sum-of-all. Net savings on a clean
-# network-isolated provision: ~10–15 minutes.
+# History:
+#   * #24 (v1.1.1) parallelized the six choco installs via Start-Job to cut
+#     CSE wall time. Worked but introduced two race classes:
+#   * #30 (v1.1.3) — Windows Installer machine-wide mutex (`Global\_MSIExecute`)
+#     contention on parallel MSI-backed packages → exit 1618 on losers.
+#     Mitigated with Invoke-ChocoWithRetry (kept below).
+#   * #31 (v1.1.3 amend) — *internal* Chocolatey file-lock race on
+#     `C:\ProgramData\chocolatey\lib\chocolatey-compatibility.extension\.chocolateyPending`
+#     (and similarly `chocolatey-core.extension`) when two jobs concurrently
+#     auto-pull the same dependency package. This race surfaces as
+#     ``Access to the path '...\.chocolateyPending' is denied.`` with choco
+#     exiting 1 — NOT 1618 — so the retry helper bypasses it and the affected
+#     package (e.g. powershell-core) is silently dropped.
 #
-# MSI mutex hardening (#30):
-#   The Windows Installer service uses a machine-wide exclusive mutex
-#   (`Global\_MSIExecute`). When more than one MSI-backed choco package is
-#   installed concurrently, all but one of the parallel `msiexec` invocations
-#   return exit code **1618** ("Another installation currently in progress").
-#   Several of our packages (powershell-core, azd, python311, sometimes git)
-#   are MSI-backed, so naive parallelization is racy. The fix is per-job
-#   retry-on-1618 with capped exponential backoff:
-#     * MSI-backed installs serialize *naturally* through the mutex via
-#       retries (each MSI waits for the previous to release the lock), so we
-#       still run all six in parallel and don't lose the wall-time benefit.
-#     * Non-MSI installs are unaffected.
-#     * Non-1618 failures fail fast (we don't paper over real package errors).
+# Fix (#31): stop parallelizing choco. Chocolatey is not designed for
+# concurrent invocations on the same machine. We run the six installs in a
+# sequential foreach loop, still through Invoke-ChocoWithRetry so genuine MSI
+# 1618 contention from unrelated installers (e.g. Azure Update Manager)
+# remains handled. The wall-time cost vs parallel is ~30–60 s, dominated
+# anyway by Defender, antimalware, AZD-MSI download, and the post-CSE reboot.
 #
 # Implementation notes:
-#   * Using built-in `Start-Job` (not `Start-ThreadJob`) on purpose:
-#     `ThreadJob` is NOT bundled with PowerShell 5.1 and would require an
-#     `Install-Module` from PSGallery — which would force adding
-#     `*.powershellgallery.com` to the firewall allowlist and a new failure
-#     mode under network isolation. `Start-Job` spawns one child
-#     `powershell.exe` per job (~1–2 s each), which is negligible against
-#     `choco install` steps that take minutes. See issue #24.
-#   * Each job calls `Invoke-ChocoWithRetry` (defined in `-InitializationScript`)
-#     which inspects stdout/stderr for the literal `1618` token and the
-#     "Another installation currently in progress" marker and retries with
-#     backoff (initial 15 s, ×2 capped at 120 s, max 8 attempts).
 #   * AZD is installed via `choco install azd` instead of `aka.ms/install-azd.ps1`
-#     so it can be parallelized with the rest. The path-discovery block below
+#     so it goes through the same retry path. The path-discovery block below
 #     still searches the legacy MSI locations as a fallback in case the
 #     chocolatey package layout changes.
 #   * Notepad++ was dropped — not used by any downstream automation.
@@ -102,63 +93,59 @@ $env:Path += ";C:\ProgramData\chocolatey\bin"
 #     (the script ends with a delayed reboot, see bottom of file).
 $chocoArgs = @('-y','--ignoredetectedreboot','--force','--no-progress','--limitoutput','--no-color')
 
-# Function definition shared by every background job via -InitializationScript.
-$chocoRetryInit = {
-    function Invoke-ChocoWithRetry {
-        param(
-            [Parameter(Mandatory=$true)][ValidateSet('install','upgrade')][string]$Action,
-            [Parameter(Mandatory=$true)][string]$Package,
-            [Parameter(Mandatory=$true)][string[]]$ExtraArgs
-        )
-        $maxAttempts = 8
-        $delay = 15
-        for ($i = 1; $i -le $maxAttempts; $i++) {
-            $output = & choco $Action $Package @ExtraArgs 2>&1 | Out-String
-            $exit = $LASTEXITCODE
-            Write-Output $output
-            if ($exit -eq 0) {
-                if ($i -gt 1) {
-                    Write-Output "[$Package] choco $Action succeeded on attempt $i/$maxAttempts after MSI lock contention."
-                }
-                return
+# Retry helper kept for genuine MSI 1618 contention (e.g. another concurrent
+# installer on the host such as Azure Update Manager). It does NOT retry on
+# Chocolatey-internal file-lock failures (#31), which were the parallelization
+# race; those cannot occur once we serialize.
+function Invoke-ChocoWithRetry {
+    param(
+        [Parameter(Mandatory=$true)][ValidateSet('install','upgrade')][string]$Action,
+        [Parameter(Mandatory=$true)][string]$Package,
+        [Parameter(Mandatory=$true)][string[]]$ExtraArgs
+    )
+    $maxAttempts = 8
+    $delay = 15
+    for ($i = 1; $i -le $maxAttempts; $i++) {
+        $output = & choco $Action $Package @ExtraArgs 2>&1 | Out-String
+        $exit = $LASTEXITCODE
+        Write-Output $output
+        if ($exit -eq 0) {
+            if ($i -gt 1) {
+                Write-Output "[$Package] choco $Action succeeded on attempt $i/$maxAttempts after MSI lock contention."
             }
-            $isMsiLockContention = ($output -match '\b1618\b') -or ($output -match 'Another installation currently in progress')
-            if ($isMsiLockContention -and $i -lt $maxAttempts) {
-                Write-Output "[$Package] MSI lock contention (exit=$exit, code 1618) on attempt $i/$maxAttempts; backing off ${delay}s..."
-                Start-Sleep -Seconds $delay
-                $delay = [Math]::Min($delay * 2, 120)
-                continue
-            }
-            if ($isMsiLockContention) {
-                Write-Warning "[$Package] choco $Action exhausted $maxAttempts retries due to persistent MSI lock contention (exit=$exit)."
-                return
-            }
-            Write-Warning "[$Package] choco $Action failed with exit=$exit (non-1618); not retrying."
             return
         }
+        $isMsiLockContention = ($output -match '\b1618\b') -or ($output -match 'Another installation currently in progress')
+        if ($isMsiLockContention -and $i -lt $maxAttempts) {
+            Write-Output "[$Package] MSI lock contention (exit=$exit, code 1618) on attempt $i/$maxAttempts; backing off ${delay}s..."
+            Start-Sleep -Seconds $delay
+            $delay = [Math]::Min($delay * 2, 120)
+            continue
+        }
+        if ($isMsiLockContention) {
+            Write-Warning "[$Package] choco $Action exhausted $maxAttempts retries due to persistent MSI lock contention (exit=$exit)."
+            return
+        }
+        Write-Warning "[$Package] choco $Action failed with exit=$exit (non-1618); not retrying."
+        return
     }
 }
 
-Write-Host "Starting parallel choco installs (vscode, azure-cli, git, python311, powershell-core, azd) with MSI-retry hardening..."
-$jobs = @(
-    Start-Job -Name vscode    -InitializationScript $chocoRetryInit -ScriptBlock { Invoke-ChocoWithRetry -Action upgrade -Package vscode          -ExtraArgs $using:chocoArgs }
-    Start-Job -Name azure-cli -InitializationScript $chocoRetryInit -ScriptBlock { Invoke-ChocoWithRetry -Action install -Package azure-cli       -ExtraArgs $using:chocoArgs }
-    Start-Job -Name git       -InitializationScript $chocoRetryInit -ScriptBlock { Invoke-ChocoWithRetry -Action upgrade -Package git             -ExtraArgs $using:chocoArgs }
-    Start-Job -Name python311 -InitializationScript $chocoRetryInit -ScriptBlock { Invoke-ChocoWithRetry -Action install -Package python311       -ExtraArgs $using:chocoArgs }
-    Start-Job -Name pwsh      -InitializationScript $chocoRetryInit -ScriptBlock { Invoke-ChocoWithRetry -Action install -Package powershell-core -ExtraArgs $using:chocoArgs }
-    Start-Job -Name azd       -InitializationScript $chocoRetryInit -ScriptBlock { Invoke-ChocoWithRetry -Action install -Package azd             -ExtraArgs $using:chocoArgs }
+$packages = @(
+    @{ Name = 'vscode';          Action = 'upgrade' }
+    @{ Name = 'azure-cli';       Action = 'install' }
+    @{ Name = 'git';             Action = 'upgrade' }
+    @{ Name = 'python311';       Action = 'install' }
+    @{ Name = 'powershell-core'; Action = 'install' }
+    @{ Name = 'azd';             Action = 'install' }
 )
 
-$jobs | Wait-Job | Out-Null
-foreach ($job in $jobs) {
-    Write-Host "`n--- choco '$($job.Name)' output (state=$($job.State)) ---"
-    Receive-Job -Job $job
-    if ($job.State -ne 'Completed') {
-        Write-Warning "choco install '$($job.Name)' did not complete cleanly (state=$($job.State))."
-    }
+Write-Host "Starting sequential choco installs with MSI-retry hardening..."
+foreach ($p in $packages) {
+    Write-Host "`n--- choco $($p.Action) $($p.Name) ---"
+    Invoke-ChocoWithRetry -Action $p.Action -Package $p.Name -ExtraArgs $chocoArgs
 }
-$jobs | Remove-Job
-Write-Host "Parallel choco installs finished."
+Write-Host "Sequential choco installs finished."
 
 # Refresh PATH for the rest of this CSE run so the tools above are resolvable
 # without waiting for the post-CSE reboot.
@@ -258,10 +245,68 @@ Write-Host "==============================================================`n" -F
 # ------------------------------
 # Clone Bicep PTN AIML Landing Zone repo
 # ------------------------------
+# All `git clone` invocations in this script run via Invoke-GitCloneWithTimeout
+# (defined below) — see issue #32. A plain `git clone` over HTTPS has no
+# upper bound on idle/zombie connections, and the Azure VM Guest Agent
+# serializes every Run-Command behind the active CSE. So a single hanging
+# clone can keep CSE in `Transitioning` for hours and freeze the entire VM
+# operation queue (including operator remediation via `az vm run-command
+# invoke`). The helper sets `GIT_HTTP_LOW_SPEED_LIMIT=1000` /
+# `GIT_HTTP_LOW_SPEED_TIME=60` (abort if <1 KB/s for 60 s — the actual
+# observed failure mode) and wraps each clone in a `Start-Job` with a hard
+# 10-minute wall clock cap, after which the job is forcibly stopped.
+function Invoke-GitCloneWithTimeout {
+    param(
+        [Parameter(Mandatory=$true)][string]$Url,
+        [Parameter(Mandatory=$true)][string]$Tag,
+        [Parameter(Mandatory=$true)][string]$Destination,
+        [int]$TimeoutSec = 600
+    )
+    Write-Host "[clone] $Url (tag=$Tag) -> $Destination (timeout=${TimeoutSec}s)"
+    $job = Start-Job -ScriptBlock {
+        param($u,$t,$d)
+        # Abort connections that aren't transferring at least 1 KB/s for 60 s.
+        # This prevents a half-open HTTPS connection from blocking forever.
+        $env:GIT_HTTP_LOW_SPEED_LIMIT = '1000'
+        $env:GIT_HTTP_LOW_SPEED_TIME  = '60'
+        # `--no-tags` skips fetching unrelated tag refs on the wire.
+        & git clone -b $t --depth 1 --no-tags $u $d 2>&1
+        exit $LASTEXITCODE
+    } -ArgumentList $Url, $Tag, $Destination
+
+    if (-not (Wait-Job $job -Timeout $TimeoutSec)) {
+        Write-Warning "[clone] timeout (${TimeoutSec}s) cloning '$Url' (tag=$Tag) into '$Destination' — aborting and continuing."
+        Stop-Job  $job -ErrorAction SilentlyContinue
+        Receive-Job $job -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_ }
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
+        # Best-effort cleanup of partial clone so a subsequent retry wouldn't
+        # be confused by a half-baked working tree.
+        if (Test-Path $Destination) {
+            Remove-Item $Destination -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $script:LASTEXITCODE = 124  # convention: 124 == timeout
+        return
+    }
+
+    Receive-Job $job | ForEach-Object { Write-Output $_ }
+    $exit = $job.ChildJobs[0].JobStateInfo.Reason
+    if ($null -ne $exit -and $exit -is [System.Exception]) {
+        Write-Warning "[clone] job for '$Url' failed: $($exit.Message)"
+        $script:LASTEXITCODE = 1
+    } else {
+        # Use the job's last exit code as our LASTEXITCODE so callers can check it.
+        $script:LASTEXITCODE = if ($job.State -eq 'Completed') { 0 } else { 1 }
+    }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+}
+
 write-host "Cloning Bicep PTN AIML Landing Zone repo"
 mkdir C:\github -ea SilentlyContinue
 cd C:\github
-git clone https://github.com/azure/bicep-ptn-aiml-landing-zone -b $release --depth 1 ai-lz
+Invoke-GitCloneWithTimeout -Url 'https://github.com/azure/bicep-ptn-aiml-landing-zone' -Tag $release -Destination 'C:\github\ai-lz'
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to clone Bicep PTN AIML Landing Zone repo (release=$release, exit=$LASTEXITCODE). Cannot continue jumpbox bootstrap."
+}
 
 
 # ------------------------------
@@ -312,7 +357,11 @@ foreach ($repo in $manifest.components) {
     }
     else {
         write-host "Cloning repository: $repoName ($tag)"
-        git clone -b $tag --depth 1 $repoUrl "C:\github\$repoName"
+        Invoke-GitCloneWithTimeout -Url $repoUrl -Tag $tag -Destination "C:\github\$repoName"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path "C:\github\$repoName")) {
+            write-warning "git clone failed for component repository '$repoName' ($tag) from '$repoUrl' (exit code $LASTEXITCODE). Skipping .azure context copy and safe-directory config."
+            continue
+        }
         copy-item C:\github\ai-lz\.azure C:\github\$repoName -recurse -force
     }
 
@@ -365,7 +414,7 @@ if (-not [string]::IsNullOrWhiteSpace($ExtraRepoUrls)) {
         }
         else {
             write-host "Cloning extra repository: $name ($tag) from $url"
-            git clone -b $tag --depth 1 $url "C:\github\$name"
+            Invoke-GitCloneWithTimeout -Url $url -Tag $tag -Destination "C:\github\$name"
             # Surface git clone failures in the CSE transcript. The CSE itself
             # will not fail because of this (we don't want a single failed
             # extra clone to roll back the entire jumpbox bootstrap), but the
