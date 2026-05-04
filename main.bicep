@@ -607,6 +607,22 @@ var _firewallEssentialPlatformFqdns = [
   '*.monitor.core.windows.net'
   '*.opinsights.azure.com'
   '*.loganalytics.io'
+  // Certificate revocation / trust list (Schannel + .NET) — fixes #42.
+  // Without these, Windows TLS clients (Bastion/jumpbox curl.exe, Invoke-WebRequest,
+  // .NET HttpClient with CheckCertificateRevocationList=true) fail with
+  // CRYPT_E_REVOCATION_OFFLINE when validating Azure-managed certs served by
+  // Container Apps / App Service / etc. These are public Microsoft + DigiCert
+  // revocation endpoints implicit in any Azure-issued cert chain — allowing them
+  // in an outbound rule does not weaken the Zero Trust posture.
+  'oneocsp.microsoft.com'
+  'ocsp.digicert.com'
+  'crl.microsoft.com'
+  'crl2.microsoft.com'
+  'crl3.microsoft.com'
+  'crl.digicert.com'
+  'crl3.digicert.com'
+  'crl4.digicert.com'
+  'ctldl.windowsupdate.com'
 ]
 var _firewallEssentialGitHubFqdns = [
   'github.com'
