@@ -252,6 +252,16 @@ param extendFirewallForAcrTaskBuilds bool = true
 @description('List of trusted source IP CIDRs allowed to connect to the Bastion public IP on port 443. When empty, all internet inbound to port 443 is denied by default.')
 param bastionAllowedSourceIPs array = []
 
+@description('Bastion SKU. `Standard` supports native client (`az network bastion rdp/ssh`) and tunneling; `Premium` adds shareable link, session recording, and private-only mode. `Basic` does not support tunneling.')
+@allowed(['Basic', 'Standard', 'Premium'])
+param bastionSkuName string = 'Standard'
+
+@description('Enable Bastion native client tunneling. Required for `az network bastion rdp/ssh`, RDP audio/clipboard/device redirection, and SSH agent forwarding. Off by default for parity with portal-only access. Requires `bastionSkuName` to be `Standard` or `Premium`.')
+param bastionEnableTunneling bool = false
+
+@description('When true, extends the Azure Firewall Policy with a Network Rule Collection allowing UDP/TCP egress from spoke subnets (jumpbox, ACA environment, agent) to the `AzureCommunicationServices` Service Tag. Required for any spoke workload that uses Azure Speech real-time avatar, Azure Communication Services Calling, or Microsoft Teams Media (WebRTC peer connections, STUN/TURN UDP 3478-3481 and TCP 443/3478-3481). Off by default to preserve least-privilege egress. Only effective when `networkIsolation` and `deployAzureFirewall` are both true.')
+param enableAcsMediaEgress bool = false
+
 @description('Will deploy network resources side by side with the Azure resources.')
 param sideBySideDeploy bool = true
 
@@ -847,28 +857,54 @@ module virtualNetwork 'br/public:avm/res/network/virtual-network:0.7.0' = if (_n
 }
 
 // Bastion Host
-module testVmBastionHost 'br/public:avm/res/network/bastion-host:0.8.0' = if (deployVM && networkIsolation) {
-  name: 'bastionHost'
-  params: {
-    // Bastion host name
-    name: '${const.abbrs.security.bastion}testvm-${resourceToken}'
-    #disable-next-line BCP318
-    virtualNetworkResourceId: virtualNetworkResourceId
-    location: location
-    skuName: 'Standard'
-    tags: _tags
-    availabilityZones: useZoneRedundancy ? [1, 2, 3] : []
+// Bastion Host — replaced the AVM `bastion-host` module with a raw resource so
+// `enableTunneling` can be set (the AVM module up to 0.8.2 does not expose it).
+// Native-client tunneling is required for `az network bastion rdp/ssh`, RDP
+// audio/clipboard/device redirection, and SSH agent forwarding from inside the
+// spoke. Behavior-equivalent to the previous module call: same subnet
+// (AzureBastionSubnet), Standard static PIP, optional zone redundancy, tags.
+resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2024-07-01' = if (deployVM && networkIsolation) {
+  name: '${const.abbrs.networking.publicIPAddress}bastion-${resourceToken}'
+  location: location
+  tags: _tags
+  sku: {
+    name: 'Standard'
+    tier: 'Regional'
+  }
+  zones: useZoneRedundancy ? ['1', '2', '3'] : []
+  properties: {
+    publicIPAllocationMethod: 'Static'
+    publicIPAddressVersion: 'IPv4'
+  }
+}
 
-    // Configuration for the Public IP that the module will create
-    publicIPAddressObject: {
-      // Name for the Public IP resource
-      name: '${const.abbrs.networking.publicIPAddress}bastion-${resourceToken}'
-      publicIPAllocationMethod: 'Static'
-      skuName: 'Standard'
-      skuTier: 'Regional'
-      availabilityZones: useZoneRedundancy ? [1, 2, 3] : []
-      tags: _tags
-    }
+resource testVmBastionHost 'Microsoft.Network/bastionHosts@2024-07-01' = if (deployVM && networkIsolation) {
+  name: '${const.abbrs.security.bastion}testvm-${resourceToken}'
+  location: location
+  tags: _tags
+  sku: {
+    name: bastionSkuName
+  }
+  zones: useZoneRedundancy ? ['1', '2', '3'] : []
+  properties: {
+    // enableTunneling is silently coerced to false on Basic SKU because the
+    // Basic SKU does not support native client tunneling. Standard and Premium
+    // accept the value.
+    enableTunneling: bastionEnableTunneling && bastionSkuName != 'Basic'
+    ipConfigurations: [
+      {
+        name: 'IpConfAzureBastionSubnet'
+        properties: {
+          subnet: {
+            #disable-next-line BCP318
+            id: '${virtualNetworkResourceId}/subnets/AzureBastionSubnet'
+          }
+          publicIPAddress: {
+            id: bastionPublicIp.id
+          }
+        }
+      }
+    ]
   }
   dependsOn: [
     #disable-next-line BCP321
@@ -1017,6 +1053,60 @@ resource firewallPolicyDefaultRuleCollectionGroup 'Microsoft.Network/firewallPol
       }
     ]
   }
+}
+
+// ACS Media (WebRTC / TURN) — opt-in network rule collection.
+// Required for Speech real-time avatar, ACS Calling, Teams Media. The signaling
+// path is HTTPS (already covered by application rules); the *media* path uses
+// UDP 3478-3481 / TCP 443+3478-3481 to the AzureCommunicationServices fleet,
+// which is otherwise dropped by the firewall under network isolation.
+// Separate rule collection group so it can be toggled independently of the
+// default group, and so the default group's priority doesn't have to shift.
+resource firewallPolicyAcsMediaRuleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2024-07-01' = if (deployAzureFirewall && _networkIsolation && enableAcsMediaEgress) {
+  parent: firewallPolicy
+  name: 'AcsMediaRuleCollectionGroup'
+  properties: {
+    priority: 300
+    ruleCollections: [
+      {
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        name: 'AllowAcsMedia'
+        priority: 100
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'NetworkRule'
+            name: 'AllowAcsMediaUdp'
+            ipProtocols: ['UDP']
+            sourceAddresses: [
+              jumpboxSubnetPrefix
+              acaEnvironmentSubnetPrefix
+              agentSubnetPrefix
+            ]
+            destinationAddresses: ['AzureCommunicationServices']
+            destinationPorts: ['3478-3481']
+          }
+          {
+            ruleType: 'NetworkRule'
+            name: 'AllowAcsMediaTcp'
+            ipProtocols: ['TCP']
+            sourceAddresses: [
+              jumpboxSubnetPrefix
+              acaEnvironmentSubnetPrefix
+              agentSubnetPrefix
+            ]
+            destinationAddresses: ['AzureCommunicationServices']
+            destinationPorts: ['443', '3478-3481']
+          }
+        ]
+      }
+    ]
+  }
+  dependsOn: [
+    firewallPolicyDefaultRuleCollectionGroup
+  ]
 }
 
 #disable-next-line BCP318
