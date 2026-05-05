@@ -135,7 +135,6 @@ $packages = @(
     @{ Name = 'vscode';          Action = 'upgrade' }
     @{ Name = 'azure-cli';       Action = 'install' }
     @{ Name = 'git';             Action = 'upgrade' }
-    @{ Name = 'python311';       Action = 'install' }
     @{ Name = 'powershell-core'; Action = 'install' }
     @{ Name = 'azd';             Action = 'install' }
 )
@@ -146,6 +145,104 @@ foreach ($p in $packages) {
     Invoke-ChocoWithRetry -Action $p.Action -Package $p.Name -ExtraArgs $chocoArgs
 }
 Write-Host "Sequential choco installs finished."
+
+# ---------------------------------------------------------------------------
+# Python 3.11 — installed from the official embeddable distribution rather
+# than the Chocolatey `python311` package. The MSI behind the choco package
+# silently produces a broken interpreter on this image (only `python.exe` and
+# `pythonw.exe` end up under C:\Python311, while `Lib\encodings`,
+# `python311.dll`, and the standard library are missing — `python --version`
+# then fails with `Fatal Python error: init_fs_encoding: failed to get the
+# Python codec of the filesystem encoding`, and reinstalling via the same MSI
+# returns exit 1603 because the broken install is still registered with no
+# clean uninstall path). See issue #48.
+#
+# The embeddable zip is hermetic (no MSI state, no installer, just unzip),
+# always ships the full standard library + `python311.dll`, and is bit-for-
+# bit reproducible across reboots. We then enable site-packages by patching
+# `python311._pth` (uncomment `import site`) so `pip install` writes into
+# `Lib\site-packages` like a normal installation, and bootstrap pip via the
+# official `get-pip.py`. After that, `python` and `pip` work end-to-end for
+# consumer postProvision / data-seed scripts that depend on
+# `azure-cosmos`, `azure-search-documents`, `azure-identity`, etc.
+# ---------------------------------------------------------------------------
+$pythonVersion   = '3.11.9'
+$pythonRoot      = 'C:\Python311'
+$pythonZipUrl    = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
+$pythonZipPath   = Join-Path $env:TEMP 'python-embed.zip'
+$getPipUrl       = 'https://bootstrap.pypa.io/get-pip.py'
+$getPipPath      = Join-Path $env:TEMP 'get-pip.py'
+$pythonExe       = Join-Path $pythonRoot 'python.exe'
+$pythonPthFile   = Join-Path $pythonRoot 'python311._pth'
+$pythonScriptDir = Join-Path $pythonRoot 'Scripts'
+
+Write-Host "`n--- Installing Python $pythonVersion (embeddable distribution) ---"
+
+try {
+    if (Test-Path $pythonRoot) {
+        Write-Host "Removing pre-existing $pythonRoot to guarantee a clean install"
+        Remove-Item -Path $pythonRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $pythonRoot -Force | Out-Null
+
+    Write-Host "Downloading $pythonZipUrl"
+    Invoke-WebRequest -Uri $pythonZipUrl -OutFile $pythonZipPath -UseBasicParsing
+    Write-Host "Extracting to $pythonRoot"
+    Expand-Archive -Path $pythonZipPath -DestinationPath $pythonRoot -Force
+    Remove-Item $pythonZipPath -Force -ErrorAction SilentlyContinue
+
+    # The embeddable distribution disables `site` and ships a `_pth` file that
+    # short-circuits sys.path discovery. Uncomment `import site` so pip-
+    # installed packages under `Lib\site-packages` are importable, and so
+    # tools that probe `site.getsitepackages()` work as expected.
+    if (Test-Path $pythonPthFile) {
+        $pthLines = Get-Content $pythonPthFile
+        $pthLines = $pthLines | ForEach-Object {
+            if ($_ -match '^\s*#\s*import\s+site\s*$') { 'import site' } else { $_ }
+        }
+        if (-not ($pthLines -contains 'import site')) {
+            $pthLines += 'import site'
+        }
+        Set-Content -Path $pythonPthFile -Value $pthLines -Encoding ASCII
+        Write-Host "Patched $pythonPthFile to enable site-packages"
+    } else {
+        Write-Warning "Expected $pythonPthFile not present after extraction"
+    }
+
+    Write-Host "Verifying interpreter integrity"
+    & $pythonExe --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "python.exe --version failed (exit=$LASTEXITCODE) immediately after extraction"
+    }
+
+    Write-Host "Bootstrapping pip via $getPipUrl"
+    Invoke-WebRequest -Uri $getPipUrl -OutFile $getPipPath -UseBasicParsing
+    & $pythonExe $getPipPath --no-warn-script-location
+    if ($LASTEXITCODE -ne 0) {
+        throw "get-pip.py failed (exit=$LASTEXITCODE)"
+    }
+    Remove-Item $getPipPath -Force -ErrorAction SilentlyContinue
+
+    foreach ($dir in @($pythonRoot, $pythonScriptDir)) {
+        try {
+            $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+            if ($machinePath -notlike "*$dir*") {
+                [Environment]::SetEnvironmentVariable('Path', "$machinePath;$dir", 'Machine')
+                Write-Host "Added $dir to MACHINE Path"
+            }
+        } catch {
+            Write-Warning "Failed to update MACHINE Path with ${dir}: $_"
+        }
+    }
+
+    # Make python/pip resolvable for the rest of this CSE run without waiting
+    # for the post-CSE reboot.
+    $env:PATH = "$pythonRoot;$pythonScriptDir;$env:PATH"
+
+    Write-Host "Python $pythonVersion install verified at $pythonExe" -ForegroundColor Green
+} catch {
+    Write-Warning "Python install failed: $_. Consumer postProvision scripts that require Python on the jumpbox may need to install it manually."
+}
 
 # Refresh PATH for the rest of this CSE run so the tools above are resolvable
 # without waiting for the post-CSE reboot.

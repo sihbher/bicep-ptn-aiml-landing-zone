@@ -688,6 +688,12 @@ var _firewallDevRuntimeFqdns = [
   '*.pypi.org'
   'files.pythonhosted.org'
   '*.pythonhosted.org'
+  // get-pip.py is served from bootstrap.pypa.io. Required by the Python
+  // embeddable-distribution install path on the jumpbox (see issue #48 and
+  // install.ps1) which downloads `get-pip.py` to bootstrap pip into
+  // `C:\Python311` after extracting the embeddable zip.
+  'bootstrap.pypa.io'
+  '*.pypa.io'
   'registry.npmjs.org'
   '*.npmjs.org'
 ]
@@ -1282,6 +1288,23 @@ var _testVmPrincipalId = (deployVM && _networkIsolation)
   : ''
 
 var _testVmRoles = (deployVM && _networkIsolation) ? concat(
+  [
+    // Reader on the resource group itself so the jumpbox SAMI can enumerate
+    // ARM resources from inside the VNet (`az resource list`,
+    // `az cosmosdb list`, `az containerapp list`, …). Required by consumer
+    // postProvision / data-seed scripts that resolve resource names by
+    // discovery when env vars / App Config values are missing or the script
+    // is being run interactively for troubleshooting. Without this, every
+    // ARM list call returns `[]` even though the SAMI already has the
+    // data-plane roles needed for the actual operations. Scoped to the
+    // resource group (empty `resourceId` => deployment scope, which is RG).
+    {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', const.roles.Reader.guid)
+      principalId: _testVmPrincipalId
+      resourceId: ''
+      principalType: 'ServicePrincipal'
+    }
+  ],
   (deployAppConfig && deployContainerRegistry) ? [
     {
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', const.roles.ContainerAppsContributor.guid)

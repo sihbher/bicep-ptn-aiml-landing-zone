@@ -150,8 +150,8 @@ When `networkIsolation=true`, egress from the jumpbox and workload subnets is fo
 | `AllowMicrosoftContainerRegistry` | `*` | `mcr.microsoft.com`, `*.data.mcr.microsoft.com` | ACA/agents/ACR Tasks pulling Microsoft base images |
 | `AllowEntraIdAuth` | `*` | `login.microsoftonline.com`, `login.windows.net`, `management.azure.com`, `graph.microsoft.com`, `*.applicationinsights.azure.com` | Entra ID auth, ARM control plane, App Insights telemetry |
 | `AllowGitHub` | `*` | `github.com`, `*.github.com`, `raw.githubusercontent.com`, `codeload.github.com`, `objects.githubusercontent.com`, `*.githubusercontent.com` | Repo clones, release downloads |
-| `AllowJumpboxBootstrap` | `jumpboxSubnetPrefix` | Chocolatey, NuGet, VS Installer, `download.microsoft.com`, `aka.ms`, `go.microsoft.com`, `*.core.windows.net`, `*.azureedge.net` | `choco install`, Python/VS Code/PowerShell Core MSIs |
-| `AllowJumpboxDevRuntimes` | `jumpboxSubnetPrefix` | `*.python.org`, `*.pypi.org`, `*.pythonhosted.org`, `*.npmjs.org` | `pip install`, `npm install` |
+| `AllowJumpboxBootstrap` | `jumpboxSubnetPrefix` | Chocolatey, NuGet, VS Installer, `download.microsoft.com`, `aka.ms`, `go.microsoft.com`, `*.core.windows.net`, `*.azureedge.net` | `choco install`, VS Code/PowerShell Core/Azure CLI/AZD MSIs (Python is installed from python.org embeddable zip — see `AllowJumpboxDevRuntimes`) |
+| `AllowJumpboxDevRuntimes` | `jumpboxSubnetPrefix` | `*.python.org`, `*.pypi.org`, `*.pythonhosted.org`, `*.pypa.io`, `*.npmjs.org` | `pip install`, `npm install`, jumpbox Python embeddable-zip install + `get-pip.py` bootstrap |
 | `AllowJumpboxEditors` | `jumpboxSubnetPrefix` | `update.code.visualstudio.com`, `*.vo.msecnd.net`, `*.vscode-cdn.net` | VS Code updates |
 | `AllowAcrTasks` | `devopsBuildAgentsSubnetPrefix` | `*.azurecr.io`, `*.data.azurecr.io` | ACR Tasks agent pool talking to its registry |
 
@@ -207,6 +207,7 @@ Current default configuration provisions a single Hello World container app (`or
 
 | Resource | Role | Assignee | Description |
 | --- | --- | --- | --- |
+| Resource Group | Reader | Jumpbox VM | Enumerate ARM resources from inside the VNet (`az resource list`, `az cosmosdb list`, `az containerapp list`, …) for postProvision / data-seed scripts |
 | GenAI App Container Apps | Container Apps Contributor | Jumpbox VM | Full control over Container Apps |
 | Azure Managed Identity | Managed Identity Operator | Jumpbox VM | Assign and manage user-assigned identities |
 | GenAI App Container Registry | Container Registry Repository Writer | Jumpbox VM | Write to ACR repositories |
