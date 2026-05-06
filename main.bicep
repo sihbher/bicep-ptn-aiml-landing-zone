@@ -262,6 +262,50 @@ param bastionEnableTunneling bool = false
 @description('When true, extends the Azure Firewall Policy with a Network Rule Collection allowing UDP/TCP egress from spoke subnets (jumpbox, ACA environment, agent) to the `AzureCommunicationServices` Service Tag. Required for any spoke workload that uses Azure Speech real-time avatar, Azure Communication Services Calling, or Microsoft Teams Media (WebRTC peer connections, STUN/TURN UDP 3478-3481 and TCP 443/3478-3481). Off by default to preserve least-privilege egress. Only effective when `networkIsolation` and `deployAzureFirewall` are both true.')
 param enableAcsMediaEgress bool = false
 
+// ----------------------------------------------------------------------
+// Public Ingress (#49) — optional Application Gateway WAF v2 in front of the
+// internal Container Apps environment. Default-disabled. WARNING: enabling
+// this deploys WAF_v2 + a Standard Public IP, which incur hourly charges
+// even when idle. To remove the stack, run `azd down` or delete the
+// resources manually — `azd`/ARM incremental deployments will NOT delete
+// these resources when `publicIngress.enabled` flips back to false after a
+// previous deploy. See README "Optional Public Ingress" for the runbook.
+// ----------------------------------------------------------------------
+
+@export()
+@description('Aggregate parameter for the optional public ingress (Application Gateway WAF v2). See README "Optional Public Ingress".')
+type publicIngressType = {
+  @description('Master toggle. When false (default) no public-ingress resources are deployed.')
+  enabled: bool
+
+  @description('Optional. Index of the entry in `containerAppsList` that the gateway routes to. Defaults to 0.')
+  backendAppIndex: int?
+
+  @description('Optional. Frontend host name presented to clients (e.g., app.contoso.com). Required to activate the HTTPS listener.')
+  frontendHostName: string?
+
+  @description('Optional. Versionless Key Vault secret ID for the TLS certificate. Required to activate the HTTPS listener.')
+  sslCertSecretId: string?
+
+  @description('Optional. CIDRs allowed to reach the gateway on TCP/443. Empty list keeps the gateway fully inert (skeleton mode).')
+  allowedSourceAddressPrefixes: string[]?
+
+  @description('Optional. WAF mode. Defaults to `Prevention`.')
+  wafMode: ('Prevention' | 'Detection')?
+
+  @description('Optional. WAF custom rules merged with the OWASP CRS 3.2 managed ruleset.')
+  wafCustomRules: object[]?
+
+  @description('Optional. AGW autoscale capacity (e.g., `{ minCapacity: 0, maxCapacity: 2 }`).')
+  capacity: object?
+
+  @description('Optional. AGW sslPolicy block. When omitted, the gateway uses the Azure default policy.')
+  sslPolicy: object?
+}
+
+@description('Optional. Public Application Gateway WAF v2 ingress in front of the internal Container Apps environment. Disabled by default. WARNING: enabling this deploys WAF_v2 and a Standard Public IP, which incur hourly charges even when idle. See README "Optional Public Ingress" for the post-deploy runbook.')
+param publicIngress publicIngressType = { enabled: false }
+
 @description('Will deploy network resources side by side with the Azure resources.')
 param sideBySideDeploy bool = true
 
@@ -578,6 +622,20 @@ module bastionNsg 'modules/networking/bastion-nsg.bicep' = if (deployVM && _netw
   }
 }
 
+// Public Ingress NSG (#49) — declared in main.bicep because the Application
+// Gateway subnet's `networkSecurityGroupResourceId` must be set in the same
+// subnet declaration that creates the subnet. Splitting NSG creation out of
+// the public-ingress module avoids a circular dependency between the subnet
+// and the gateway.
+module appGwNsg 'modules/networking/appgw-nsg.bicep' = if (_publicIngressEnabled) {
+  name: 'appGwNsgDeployment'
+  params: {
+    name: 'nsg-${vnetName}-${azureAppGatewaySubnetName}'
+    location: location
+    allowedSourceAddressPrefixes: _publicIngressAllowedSources
+  }
+}
+
 // Firewall FQDN allowlist for essential outbound connectivity
 // Essential (shared across subnets, source = '*'): auth, container registry mirror, GitHub
 var _firewallEssentialAuthFqdns = [
@@ -724,6 +782,13 @@ var _firewallSpeechFqdns = deploySpeechService ? [
 // `az acr build --agent-pool` hang indefinitely in `Queued` state because
 // the agent VM cannot reach the storage queue. See issue #18.
 var _deployAcrTaskAgentPool = deployContainerRegistry && _networkIsolation && deployAcrTaskAgentPool
+
+// Public Ingress (#49) — only effective in network-isolated mode with Container
+// Apps deployed. The gateway fronts an internal ACA environment, so it is a
+// no-op outside that topology.
+var _publicIngressEnabled = publicIngress.enabled && _networkIsolation && deployContainerEnv && deployContainerApps && length(containerAppsList) > 0
+var _publicIngressBackendIndex = publicIngress.?backendAppIndex ?? 0
+var _publicIngressAllowedSources = publicIngress.?allowedSourceAddressPrefixes ?? []
 var _firewallAcrTaskFqdns = _deployAcrTaskAgentPool ? [
   '*.azurecr.io'
   '*.data.azurecr.io'
@@ -799,6 +864,8 @@ var baseSubnets = [
       {
         name: azureAppGatewaySubnetName
         addressPrefix: azureAppGatewaySubnetPrefix  
+        #disable-next-line BCP318
+        networkSecurityGroupResourceId: _publicIngressEnabled ? appGwNsg!.outputs.id : ''
         delegation: ''
         serviceEndpoints : []
       }
@@ -3188,6 +3255,32 @@ module containerAppsSettings 'modules/container-apps/container-apps-list.bicep' 
   }
 }
 
+// Optional Public Ingress (#49) — Application Gateway WAF v2 in front of the
+// internal Container Apps environment. See `modules/networking/public-ingress.bicep`
+// and the README "Optional Public Ingress" section for the runbook.
+module publicIngressM 'modules/networking/public-ingress.bicep' = if (_publicIngressEnabled) {
+  name: 'publicIngressDeployment'
+  params: {
+    namePrefix: 'agw-${resourceToken}'
+    location: location
+    tags: _tags
+    #disable-next-line BCP318
+    appGatewaySubnetResourceId: '${virtualNetworkResourceId}/subnets/${azureAppGatewaySubnetName}'
+    logAnalyticsWorkspaceResourceId: deployLogAnalytics ? logAnalytics.id : ''
+    #disable-next-line BCP318
+    backendAppFqdn: containerApps[_publicIngressBackendIndex].outputs.fqdn
+    useZoneRedundancy: useZoneRedundancy
+    wafMode: publicIngress.?wafMode ?? 'Prevention'
+    wafCustomRules: publicIngress.?wafCustomRules ?? []
+    capacity: publicIngress.?capacity ?? { minCapacity: 0, maxCapacity: 2 }
+    sslPolicy: publicIngress.?sslPolicy ?? {}
+    sslCertSecretId: publicIngress.?sslCertSecretId ?? ''
+    frontendHostName: publicIngress.?frontendHostName ?? ''
+    keyVaultResourceId: deployKeyVault ? keyVault.id : ''
+    keyVaultName: deployKeyVault ? keyVaultName : ''
+  }
+}
+
 // prepare the model deployment names for the app configuration store
 var _modelDeploymentNamesSettings = [
   for modelDeployment in modelDeploymentList: {
@@ -3434,3 +3527,35 @@ output AZURE_SPEECH_RESOURCE_ID string = deploySpeechService ? speechService.out
 output AZURE_SPEECH_ENDPOINT string = deploySpeechService ? speechService.outputs.endpoint : ''
 output AZURE_SPEECH_REGION string = deploySpeechService ? _speechServiceLocation : ''
 output AZURE_SPEECH_RESOURCE_NAME string = deploySpeechService ? speechServiceName : ''
+
+// ──────────────────────────────────────────────────────────────────────
+// Public Ingress (#49) — surface the gateway for downstream automation
+// (DNS A record, NSG audit, health checks). Empty when not deployed.
+// ──────────────────────────────────────────────────────────────────────
+output PUBLIC_INGRESS_ENABLED bool = _publicIngressEnabled
+#disable-next-line BCP318
+output PUBLIC_INGRESS_PUBLIC_IP string = _publicIngressEnabled ? publicIngressM!.outputs.publicIp : ''
+#disable-next-line BCP318
+output PUBLIC_INGRESS_PUBLIC_IP_RESOURCE_ID string = _publicIngressEnabled ? publicIngressM!.outputs.publicIpResourceId : ''
+#disable-next-line BCP318
+output PUBLIC_INGRESS_GATEWAY_RESOURCE_ID string = _publicIngressEnabled ? publicIngressM!.outputs.gatewayResourceId : ''
+#disable-next-line BCP318
+output PUBLIC_INGRESS_NSG_RESOURCE_ID string = _publicIngressEnabled ? appGwNsg!.outputs.id : ''
+#disable-next-line BCP318
+output PUBLIC_INGRESS_WAF_POLICY_RESOURCE_ID string = _publicIngressEnabled ? publicIngressM!.outputs.wafPolicyResourceId : ''
+#disable-next-line BCP318
+output PUBLIC_INGRESS_IDENTITY_PRINCIPAL_ID string = _publicIngressEnabled ? publicIngressM!.outputs.identityPrincipalId : ''
+#disable-next-line BCP318
+output PUBLIC_INGRESS_LIVE bool = _publicIngressEnabled ? publicIngressM!.outputs.liveMode : false
+
+// Landing-zone outputs that the public-ingress module (or external consumers)
+// depend on. Surfacing these unconditionally aligns with #49.
+output APP_GATEWAY_SUBNET_RESOURCE_ID string = _networkIsolation ? '${virtualNetworkResourceId}/subnets/${azureAppGatewaySubnetName}' : ''
+output VNET_RESOURCE_ID string = virtualNetworkResourceId
+#disable-next-line BCP318
+output KEY_VAULT_RESOURCE_ID string = deployKeyVault ? keyVault.id : ''
+output KEY_VAULT_NAME string = deployKeyVault ? keyVaultName : ''
+#disable-next-line BCP318
+output LOG_ANALYTICS_RESOURCE_ID string = deployLogAnalytics ? logAnalytics.id : ''
+#disable-next-line BCP318
+output CONTAINER_APP_INTERNAL_FQDN string = (deployContainerApps && length(containerAppsList) > 0) ? containerApps[_publicIngressBackendIndex].outputs.fqdn : ''

@@ -223,3 +223,85 @@ Current default configuration provisions a single Hello World container app (`or
 | GenAI App Cosmos DB | Cosmos DB Built-in Data Contributor | Jumpbox VM | Read/write Cosmos DB data |
 | Microsoft Foundry Account | Cognitive Services Contributor | Jumpbox VM | Manage Cognitive Services resources |
 | Microsoft Foundry Account | Cognitive Services OpenAI User | Jumpbox VM | Use OpenAI APIs |
+
+### Optional Public Ingress (Application Gateway WAF v2)
+
+**Issue #49.** The landing zone provisions the Container Apps environment in **internal** mode under network isolation, so its apps are unreachable from the public Internet by default. Some workloads need a controlled, audited public entry point (a tester, a partner integration, a public demo). The optional `publicIngress` feature deploys an **Application Gateway WAF v2** in front of the internal ACA environment without changing any of the existing internal topology.
+
+> ⚠️ **Cost warning.** Enabling this feature deploys WAF_v2 + a Standard Public IP, which incur **hourly charges even when idle** (~USD 240/month for the gateway alone, region-dependent). Keep `publicIngress.enabled = false` unless actively needed and tear the stack down with `azd down` (or delete the resources manually) when the access window ends. **Setting `publicIngress.enabled` back to `false` after a deploy will NOT delete the resources** — `azd`/ARM incremental deployments only stop managing them.
+
+**Default state:** disabled. No public-ingress resources are provisioned.
+
+**Parameter contract** (`publicIngressType` exported from `main.bicep`):
+
+```bicep
+publicIngress: {
+  enabled: bool                              // master toggle, default false
+  backendAppIndex: int?                      // index into containerAppsList; default 0
+  frontendHostName: string?                  // e.g., 'app.contoso.com' — required to activate HTTPS
+  sslCertSecretId: string?                   // versionless Key Vault secret URI — required to activate HTTPS
+  allowedSourceAddressPrefixes: string[]?    // CIDRs allowed to reach :443; empty list = deny-all
+  wafMode: ('Prevention' | 'Detection')?     // default 'Prevention'
+  wafCustomRules: object[]?                  // merged with OWASP CRS 3.2 managed ruleset
+  capacity: object?                          // default { minCapacity: 0, maxCapacity: 2 }
+  sslPolicy: object?                         // default Azure baseline
+}
+```
+
+**Resources deployed when `enabled = true`** (only effective with `networkIsolation`, `deployContainerEnv`, and at least one entry in `containerAppsList`):
+
+| Resource | Purpose |
+| --- | --- |
+| `Microsoft.Network/networkSecurityGroups` (`nsg-<vnet>-AppGatewaySubnet`) | Deny-all inbound except `GatewayManager` (65200-65535) and `AzureLoadBalancer`. Adds an `AllowHttpsFromAllowedSources` rule on TCP/443 only when `allowedSourceAddressPrefixes` is non-empty. **Port 80 is never opened from the Internet.** |
+| `Microsoft.Network/publicIPAddresses` | Standard SKU, Static, zone-redundant when `useZoneRedundancy=true`. |
+| `Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies` | OWASP CRS 3.2, mode `Prevention` (or `Detection`), `wafCustomRules` merged in. |
+| `Microsoft.ManagedIdentity/userAssignedIdentities` | Dedicated UAI for the gateway. |
+| `Microsoft.Authorization/roleAssignments` (`Key Vault Secrets User`) | Granted to the AGW UAI on the landing-zone Key Vault when `deployKeyVault=true`. External Key Vaults must be granted manually. |
+| `Microsoft.Network/applicationGateways` | WAF_v2 SKU, autoscale 0..2, zone-redundant, attached to the existing `AppGatewaySubnet` (192.168.3.0/27). Backend pool targets the Container App's internal FQDN over HTTPS:443 with `pickHostNameFromBackendAddress=true`. |
+| Diagnostic settings | Streamed to the existing Log Analytics workspace (`allLogs` + `AllMetrics`). |
+
+**Two operational states:**
+
+1. **Skeleton mode** (`enabled=true` and either `sslCertSecretId` or `frontendHostName` empty)
+   - Gateway exists with a single HTTP:80 listener routed to the backend.
+   - NSG denies all Internet inbound (port 80 is never opened by the NSG).
+   - The skeleton is **inert**: no client can reach it from the Internet until the operator transitions to live mode.
+
+2. **Live mode** (`enabled=true` with both `sslCertSecretId` and `frontendHostName` set, plus `allowedSourceAddressPrefixes` non-empty)
+   - HTTPS:443 listener using the Key Vault certificate (the AGW UAI reads it via `Key Vault Secrets User`).
+   - HTTP:80 becomes a permanent HTTP→HTTPS redirect.
+   - NSG allows TCP/443 from the supplied source CIDRs only.
+
+**Post-deploy runbook (BYO cert + DNS):**
+
+1. Provision (or import) a TLS certificate for your custom hostname (e.g., `app.contoso.com`) into the landing-zone Key Vault as a **secret** (PFX without passphrase, base64-encoded — App Gateway requires this exact shape) and capture the **versionless** secret URI (`https://<kv>.vault.azure.net/secrets/<name>`).
+2. Create a public DNS A record for the hostname pointing at `PUBLIC_INGRESS_PUBLIC_IP` (surfaced as a deployment output).
+3. Set the operator parameters in `main.parameters.json` (or via `azd env set` followed by an edit since `publicIngress` is an aggregate object):
+   ```jsonc
+   "publicIngress": {
+     "value": {
+       "enabled": true,
+       "frontendHostName": "app.contoso.com",
+       "sslCertSecretId": "https://<kv>.vault.azure.net/secrets/<name>",
+       "allowedSourceAddressPrefixes": ["203.0.113.0/24"]
+     }
+   }
+   ```
+4. Run `azd provision` again. The HTTPS listener, redirect rule, and NSG allow rule are now in place.
+5. Validate end-to-end: `curl -v https://app.contoso.com/` should return the Container App's response; `curl -v http://app.contoso.com/` should redirect to HTTPS.
+
+**Teardown:** run `azd down` to remove the entire deployment, or delete the gateway/PIP/WAF policy/NSG/UAI manually. As stated above, flipping `enabled` back to `false` and re-provisioning will **not** delete the resources due to ARM incremental deployment semantics.
+
+**Outputs surfaced by `main.bicep`:**
+
+| Output | Description |
+| --- | --- |
+| `PUBLIC_INGRESS_ENABLED` | Whether the stack was effectively deployed (also requires `networkIsolation` + `deployContainerEnv` + non-empty `containerAppsList`). |
+| `PUBLIC_INGRESS_PUBLIC_IP` | The gateway's public IPv4 address (point your DNS A record at this). |
+| `PUBLIC_INGRESS_GATEWAY_RESOURCE_ID` | Application Gateway resource ID. |
+| `PUBLIC_INGRESS_NSG_RESOURCE_ID` | NSG attached to the AGW subnet. |
+| `PUBLIC_INGRESS_WAF_POLICY_RESOURCE_ID` | WAF policy resource ID (for adding custom rules outside the template). |
+| `PUBLIC_INGRESS_IDENTITY_PRINCIPAL_ID` | Principal ID of the AGW UAI (use to grant access to external Key Vaults). |
+| `PUBLIC_INGRESS_LIVE` | `true` only when both `sslCertSecretId` and `frontendHostName` are set (live mode). |
+
+In addition, the landing zone now surfaces a small set of outputs that consumers (and this module) depend on: `APP_GATEWAY_SUBNET_RESOURCE_ID`, `VNET_RESOURCE_ID`, `KEY_VAULT_RESOURCE_ID`, `KEY_VAULT_NAME`, `LOG_ANALYTICS_RESOURCE_ID`, and `CONTAINER_APP_INTERNAL_FQDN`.

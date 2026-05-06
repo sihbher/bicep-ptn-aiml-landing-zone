@@ -39,6 +39,7 @@
     "bastionSkuName":                       { "value": "${BASTION_SKU_NAME=Standard}" },
     "bastionEnableTunneling":               { "value": "${BASTION_ENABLE_TUNNELING=false}" },
     "enableAcsMediaEgress":                 { "value": "${ENABLE_ACS_MEDIA_EGRESS=false}" },
+    "publicIngress":                        { "value": { "enabled": false } },
     "deployMcp":                            { "value": "true" },
     "deployGroundingWithBing":              { "value": "false" },
     "deployKeyVault":                       { "value": "true" },
