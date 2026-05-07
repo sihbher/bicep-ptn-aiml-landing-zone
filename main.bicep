@@ -259,7 +259,7 @@ param bastionSkuName string = 'Standard'
 @description('Enable Bastion native client tunneling. Required for `az network bastion rdp/ssh`, RDP audio/clipboard/device redirection, and SSH agent forwarding. Off by default for parity with portal-only access. Requires `bastionSkuName` to be `Standard` or `Premium`.')
 param bastionEnableTunneling bool = false
 
-@description('When true, extends the Azure Firewall Policy with a Network Rule Collection allowing UDP/TCP egress from spoke subnets (jumpbox, ACA environment, agent) to the `AzureCommunicationServices` Service Tag. Required for any spoke workload that uses Azure Speech real-time avatar, Azure Communication Services Calling, or Microsoft Teams Media (WebRTC peer connections, STUN/TURN UDP 3478-3481 and TCP 443/3478-3481). Off by default to preserve least-privilege egress. Only effective when `networkIsolation` and `deployAzureFirewall` are both true.')
+@description('When true, extends the Azure Firewall Policy with a Network Rule Collection allowing UDP/TCP egress from spoke subnets (jumpbox, ACA environment, agent) to the `AzureCloud` Service Tag. Required for any spoke workload that uses Azure Speech real-time avatar, Azure Communication Services Calling, or Microsoft Teams Media (WebRTC peer connections, STUN/TURN UDP 3478-3481 and TCP 443/3478-3481). Off by default to preserve least-privilege egress. Only effective when `networkIsolation` and `deployAzureFirewall` are both true.')
 param enableAcsMediaEgress bool = false
 
 // ----------------------------------------------------------------------
@@ -1131,8 +1131,14 @@ resource firewallPolicyDefaultRuleCollectionGroup 'Microsoft.Network/firewallPol
 // ACS Media (WebRTC / TURN) — opt-in network rule collection.
 // Required for Speech real-time avatar, ACS Calling, Teams Media. The signaling
 // path is HTTPS (already covered by application rules); the *media* path uses
-// UDP 3478-3481 / TCP 443+3478-3481 to the AzureCommunicationServices fleet,
+// UDP 3478-3481 / TCP 443+3478-3481 to the ACS / Speech avatar TURN fleet,
 // which is otherwise dropped by the firewall under network isolation.
+// Note: the destination is the `AzureCloud` service tag, not a hypothetical
+// `AzureCommunicationServices` tag — the latter does not exist in the Azure
+// service-tag namespace, and the actual TURN backends (e.g.
+// `relay.communication.microsoft.com`,
+// `a-tr-skysc-*.<region>.cloudapp.azure.com`) resolve into IP ranges covered
+// by `AzureCloud` / `AzureCloud.<region>`. See issue #50.
 // Separate rule collection group so it can be toggled independently of the
 // default group, and so the default group's priority doesn't have to shift.
 resource firewallPolicyAcsMediaRuleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2024-07-01' = if (deployAzureFirewall && _networkIsolation && enableAcsMediaEgress) {
@@ -1158,7 +1164,7 @@ resource firewallPolicyAcsMediaRuleCollectionGroup 'Microsoft.Network/firewallPo
               acaEnvironmentSubnetPrefix
               agentSubnetPrefix
             ]
-            destinationAddresses: ['AzureCommunicationServices']
+            destinationAddresses: ['AzureCloud']
             destinationPorts: ['3478-3481']
           }
           {
@@ -1170,7 +1176,7 @@ resource firewallPolicyAcsMediaRuleCollectionGroup 'Microsoft.Network/firewallPo
               acaEnvironmentSubnetPrefix
               agentSubnetPrefix
             ]
-            destinationAddresses: ['AzureCommunicationServices']
+            destinationAddresses: ['AzureCloud']
             destinationPorts: ['443', '3478-3481']
           }
         ]
