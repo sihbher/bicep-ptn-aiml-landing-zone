@@ -269,7 +269,7 @@ module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint
         }
       }
     ]
-    privateDnsZoneGroup: !empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId) ? {
+    privateDnsZoneGroup: (!empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?openAiPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?aiServicesPrivateDnsZoneResourceId)) ? {
       privateDnsZoneGroupConfigs: [
         {
           privateDnsZoneResourceId: aiFoundryConfiguration!.networking!.cognitiveServicesPrivateDnsZoneResourceId!

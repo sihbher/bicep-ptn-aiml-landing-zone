@@ -34,7 +34,7 @@
     "deployContainerRegistry":              { "value": "true" },
     "deployContainerEnv":                   { "value": "true" },
     "deployNsgs":                           { "value": "true" },
-    "deployAzureFirewall":                  { "value": "${DEPLOY_AZURE_FIREWALL=false}" },
+    "deployAzureFirewall":                  { "value": "${DEPLOY_AZURE_FIREWALL}" },
     "deployAcrTaskAgentPool":               { "value": "${DEPLOY_ACR_TASK_AGENT_POOL=false}" },
     "bastionAllowedSourceIPs":              { "value": [] },
     "bastionSkuName":                       { "value": "${BASTION_SKU_NAME=Standard}" },
@@ -89,7 +89,7 @@
     "deploySubnets":                         { "value": "${DEPLOY_SUBNETS}" },  
     "sideBySideDeploy":                      { "value": "${SIDE_BY_SIDE}" }, 
     "existingVnetResourceId":                { "value": "${EXISTING_VNET_RESOURCE_ID}" },
-    "policyManagedPrivateDns":               { "value": "${POLICY_MANAGED_PRIVATE_DNS}" },     
+    "policyManagedPrivateDns":               { "value": "${POLICY_MANAGED_PRIVATE_DNS=false}" },     
 
     "modelDeploymentList":{
       "value": [
