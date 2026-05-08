@@ -74,19 +74,19 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.26.2' = {
       virtualNetworkRules: []
       defaultAction: disablePublicNetworkAccess ? 'Deny' : 'Allow'
     }
-    privateEndpoints: (!empty(privateEndpointSubnetResourceId) && !empty(blobPrivateDnsZoneResourceId))
+    privateEndpoints: !empty(privateEndpointSubnetResourceId)
       ? [
           {
             name: 'pe-${name}-blob'
             service: 'blob'
             subnetResourceId: privateEndpointSubnetResourceId
-            privateDnsZoneGroup: {
+            privateDnsZoneGroup: !empty(blobPrivateDnsZoneResourceId) ? {
               privateDnsZoneGroupConfigs: [
                 {
                   privateDnsZoneResourceId: blobPrivateDnsZoneResourceId
                 }
               ]
-            }
+            } : null
           }
         ]
       : []

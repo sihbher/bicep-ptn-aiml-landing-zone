@@ -93,7 +93,7 @@ module foundryAccount 'modules/account.bicep' = {
     aiModelDeployments: aiModelDeployments
     privateEndpointSubnetResourceId: privateEndpointSubnetResourceId
     agentSubnetResourceId: aiFoundryConfiguration.?networking.?agentServiceSubnetResourceId
-    privateDnsZoneResourceIds: !empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking)
+    privateDnsZoneResourceIds: !empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId)
       ? [
           aiFoundryConfiguration!.networking!.cognitiveServicesPrivateDnsZoneResourceId!
           aiFoundryConfiguration!.networking!.openAiPrivateDnsZoneResourceId!
@@ -269,7 +269,7 @@ module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint
         }
       }
     ]
-    privateDnsZoneGroup: {
+    privateDnsZoneGroup: !empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId) ? {
       privateDnsZoneGroupConfigs: [
         {
           privateDnsZoneResourceId: aiFoundryConfiguration!.networking!.cognitiveServicesPrivateDnsZoneResourceId!
@@ -281,7 +281,7 @@ module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint
           privateDnsZoneResourceId: aiFoundryConfiguration!.networking!.aiServicesPrivateDnsZoneResourceId!
         }
       ]
-    }
+    } : null
   }
   dependsOn: [
     foundryProject
@@ -399,14 +399,14 @@ type foundryNetworkConfigurationType = {
   @description('Optional. The Resource ID of the subnet for the Azure AI Services account. This is required if \'createAIAgentService\' is true.')
   agentServiceSubnetResourceId: string?
 
-  @description('Required. The Resource ID of the Private DNS Zone for the Azure AI Services account.')
-  cognitiveServicesPrivateDnsZoneResourceId: string
+  @description('Optional. The Resource ID of the Private DNS Zone for the Azure AI Services account. Required unless DNS is policy-managed.')
+  cognitiveServicesPrivateDnsZoneResourceId: string?
 
-  @description('Required. The Resource ID of the Private DNS Zone for the OpenAI account.')
-  openAiPrivateDnsZoneResourceId: string
+  @description('Optional. The Resource ID of the Private DNS Zone for the OpenAI account. Required unless DNS is policy-managed.')
+  openAiPrivateDnsZoneResourceId: string?
 
-  @description('Required. The Resource ID of the Private DNS Zone for the Azure AI Services account.')
-  aiServicesPrivateDnsZoneResourceId: string
+  @description('Optional. The Resource ID of the Private DNS Zone for the Azure AI Services account. Required unless DNS is policy-managed.')
+  aiServicesPrivateDnsZoneResourceId: string?
 }
 
 @export()
