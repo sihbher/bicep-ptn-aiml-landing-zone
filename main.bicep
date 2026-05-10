@@ -1604,49 +1604,49 @@ module privateDnsZones 'modules/networking/private-dns-zones.bicep' = if (_deplo
 // Private Endpoints (consolidated into a single for-loop module with @batchSize(1) to keep compiled ARM template under 4 MB while preserving serialized PE creation).
 ///////////////////////////////////////////////////////////////////////////
 
-var _peDnsZoneGroupBlob = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupBlob = policyManagedPrivateDns ? null : {
   name: 'blobDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'blobARecord', privateDnsZoneResourceId: _dnsZoneBlobId }
   ]
 }
-var _peDnsZoneGroupCosmos = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupCosmos = policyManagedPrivateDns ? null : {
   name: 'cosmosDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'cosmosARecord', privateDnsZoneResourceId: _dnsZoneCosmosId }
   ]
 }
-var _peDnsZoneGroupSearch = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupSearch = policyManagedPrivateDns ? null : {
   name: 'searchDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'searchARecord', privateDnsZoneResourceId: _dnsZoneSearchId }
   ]
 }
-var _peDnsZoneGroupKeyVault = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupKeyVault = policyManagedPrivateDns ? null : {
   name: 'kvDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'kvARecord', privateDnsZoneResourceId: _dnsZoneKeyVaultId }
   ]
 }
-var _peDnsZoneGroupAppConfig = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupAppConfig = policyManagedPrivateDns ? null : {
   name: 'appConfigDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'appConfigARecord', privateDnsZoneResourceId: _dnsZoneAppConfigId }
   ]
 }
-var _peDnsZoneGroupContainerApps = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupContainerApps = policyManagedPrivateDns ? null : {
   name: 'ccaDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'ccaARecord', privateDnsZoneResourceId: _dnsZoneContainerAppsId }
   ]
 }
-var _peDnsZoneGroupAcr = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupAcr = policyManagedPrivateDns ? null : {
   name: 'acrDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'acr', privateDnsZoneResourceId: _dnsZoneAcrId }
   ]
 }
-var _peDnsZoneGroupCogSvcs = policyManagedPrivateDns ? {} : {
+var _peDnsZoneGroupCogSvcs = policyManagedPrivateDns ? null : {
   name: 'cogSvcsDnsZoneGroup'
   privateDnsZoneGroupConfigs: [
     { name: 'cogSvcsARecord', privateDnsZoneResourceId: _dnsZoneCogSvcsId }
@@ -1855,7 +1855,7 @@ module aiFoundryStorageAccount 'modules/ai-foundry/storage-account.bicep' = if (
     skuName: aiFoundryStorageSku
     disablePublicNetworkAccess: _networkIsolation
     privateEndpointSubnetResourceId: _networkIsolation ? _peSubnetId : ''
-    blobPrivateDnsZoneResourceId: _networkIsolation ? _dnsZoneBlobId : ''
+    blobPrivateDnsZoneResourceId: (_networkIsolation && !policyManagedPrivateDns) ? _dnsZoneBlobId : ''
   }
   dependsOn: [
     #disable-next-line BCP321
@@ -1863,8 +1863,7 @@ module aiFoundryStorageAccount 'modules/ai-foundry/storage-account.bicep' = if (
     #disable-next-line BCP321
     (_networkIsolation && useExistingVNet && deploySubnets) ? virtualNetworkSubnets : null
     #disable-next-line BCP321
-    _networkIsolation ? privateDnsZones : null
-    // Serialize PE creation against the shared `pe-subnet` (fixes #41). The aggregator
+    (_networkIsolation && !policyManagedPrivateDns) ? privateDnsZones : null
     // `privateEndpoints` module creates ~10 PEs against `pe-subnet` (already serialized
     // internally via @batchSize(1)). This module also creates an inline blob PE on the
     // same subnet via the AVM storage-account module's `privateEndpoints` parameter.
@@ -1970,33 +1969,39 @@ var varPeSubnetId = empty(existingVnetResourceId!)
   ? '${virtualNetworkResourceId}/subnets/pe-subnet'
   : '${existingVnetResourceId!}/subnets/pe-subnet'
 
-var varAfNetworkingOverride = _networkIsolation ? {
-  cognitiveServicesPrivateDnsZoneResourceId: _dnsZoneCogSvcsId
-  openAiPrivateDnsZoneResourceId: _dnsZoneOpenAiId
-  aiServicesPrivateDnsZoneResourceId: _dnsZoneAiServicesId
-  agentServiceSubnetResourceId: deployAiFoundrySubnet ? _agentSubnetId : null
-} : null
+var varAfNetworkingOverride = _networkIsolation
+  ? (policyManagedPrivateDns
+    ? {
+        agentServiceSubnetResourceId: deployAiFoundrySubnet ? _agentSubnetId : null
+      }
+    : {
+        cognitiveServicesPrivateDnsZoneResourceId: _dnsZoneCogSvcsId
+        openAiPrivateDnsZoneResourceId: _dnsZoneOpenAiId
+        aiServicesPrivateDnsZoneResourceId: _dnsZoneAiServicesId
+        agentServiceSubnetResourceId: deployAiFoundrySubnet ? _agentSubnetId : null
+      })
+  : null
 
 var varAfAiSearchCfgComplete = {
   existingResourceId: aiSearchResourceId != ''
     ? aiSearchResourceId
     : deployAiFoundry ? searchServiceAIFoundry.outputs.resourceId : null
   name: aiFoundrySearchServiceName
-  privateDnsZoneResourceId: _networkIsolation ? _dnsZoneSearchId : null
+  privateDnsZoneResourceId: (_networkIsolation && !policyManagedPrivateDns) ? _dnsZoneSearchId : null
   roleAssignments: []
 }
 
 var varAfCosmosCfgComplete = {
   existingResourceId: aiFoundryCosmosDBAccountResourceId != '' ? aiFoundryCosmosDBAccountResourceId : null
   name: aiFoundryCosmosDbName
-  privateDnsZoneResourceId: _networkIsolation ? _dnsZoneCosmosId : null
+  privateDnsZoneResourceId: (_networkIsolation && !policyManagedPrivateDns) ? _dnsZoneCosmosId : null
   roleAssignments: []
 }
 
 var varAfKVCfgComplete = {
   existingResourceId: keyVaultResourceId != '' ? keyVaultResourceId : null
   name: '${const.abbrs.security.keyVault}ai-${resourceToken}'
-  privateDnsZoneResourceId: _networkIsolation ? _dnsZoneKeyVaultId : null
+  privateDnsZoneResourceId: (_networkIsolation && !policyManagedPrivateDns) ? _dnsZoneKeyVaultId : null
   roleAssignments: []
 }
 
@@ -2010,7 +2015,7 @@ var varAfStorageCfgComplete = {
     ? aiFoundryStorageAccountResourceId
     : (deployAiFoundry ? aiFoundryStorageAccount.outputs.resourceId : null)
   name: aiFoundryStorageAccountName
-  blobPrivateDnsZoneResourceId: _networkIsolation ? _dnsZoneBlobId : null
+  blobPrivateDnsZoneResourceId: (_networkIsolation && !policyManagedPrivateDns) ? _dnsZoneBlobId : null
   roleAssignments: []
 }
 
@@ -2145,7 +2150,7 @@ module privateEndpointPrivateLinkScope 'modules/networking/private-endpoint.bice
         }
       }
     ]
-    privateDnsZoneGroup: policyManagedPrivateDns ? {} : {
+    privateDnsZoneGroup: policyManagedPrivateDns ? null : {
       name: 'privateLinkDnsZoneGroup'
       privateDnsZoneGroupConfigs: [
         { name: 'azuremonitorARecord', privateDnsZoneResourceId: _dnsZoneAzureMonitorId }

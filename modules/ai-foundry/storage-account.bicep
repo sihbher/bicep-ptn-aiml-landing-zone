@@ -74,12 +74,13 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.26.2' = {
       virtualNetworkRules: []
       defaultAction: disablePublicNetworkAccess ? 'Deny' : 'Allow'
     }
-    privateEndpoints: (!empty(privateEndpointSubnetResourceId) && !empty(blobPrivateDnsZoneResourceId))
+    privateEndpoints: !empty(privateEndpointSubnetResourceId)
       ? [
-          {
+          union({
             name: 'pe-${name}-blob'
             service: 'blob'
             subnetResourceId: privateEndpointSubnetResourceId
+          }, !empty(blobPrivateDnsZoneResourceId) ? {
             privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
@@ -87,7 +88,7 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.26.2' = {
                 }
               ]
             }
-          }
+          } : {})
         ]
       : []
     enableTelemetry: enableTelemetry

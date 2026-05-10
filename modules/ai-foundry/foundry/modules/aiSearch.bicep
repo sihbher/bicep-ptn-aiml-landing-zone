@@ -36,7 +36,7 @@ resource existingSearchService 'Microsoft.Search/searchServices@2025-05-01' exis
   scope: resourceGroup(existingSubscriptionId, existingResourceGroupName)
 }
 
-var privateNetworkingEnabled = !empty(privateDnsZoneResourceId) && !empty(privateEndpointSubnetResourceId)
+var privateNetworkingEnabled = !empty(privateEndpointSubnetResourceId)
 
 module aiSearch 'br/public:avm/res/search/search-service:0.11.1' = if (empty(existingResourceId)) {
   name: take('avm.res.search.search-service.${name}', 64)
@@ -63,7 +63,9 @@ module aiSearch 'br/public:avm/res/search/search-service:0.11.1' = if (empty(exi
     roleAssignments: roleAssignments
     privateEndpoints: privateNetworkingEnabled
       ? [
-          {
+          union({
+            subnetResourceId: privateEndpointSubnetResourceId!
+          }, !empty(privateDnsZoneResourceId) ? {
             privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
@@ -71,8 +73,7 @@ module aiSearch 'br/public:avm/res/search/search-service:0.11.1' = if (empty(exi
                 }
               ]
             }
-            subnetResourceId: privateEndpointSubnetResourceId!
-          }
+          } : {})
         ]
       : []
     tags: tags
