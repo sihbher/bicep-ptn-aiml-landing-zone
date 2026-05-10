@@ -757,7 +757,7 @@ var _firewallDevRuntimeFqdns = [
 ]
 // Jumpbox ACME workflow egress (issue #53): scoped only to the jumpbox subnet
 // and only when `extendFirewallForJumpboxBootstrap=true`.
-// - api.github.com: discover latest win-acme release asset during bootstrap.
+// - api.github.com: reserved for ACME-client release discovery / plugin checks.
 // - acme-v02.api.letsencrypt.org: Let's Encrypt ACME v2 directory endpoint
 //   used during certificate issuance/renewal.
 var _firewallJumpboxAcmeFqdns = [

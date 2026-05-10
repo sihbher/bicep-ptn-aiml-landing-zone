@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.1.9] - 2026-05-10
+
+### Fixed
+- **Jumpbox win-acme bootstrap no longer depends on GitHub release discovery** (fixes #55): `install.ps1` now downloads a pinned `win-acme.v2.2.9.1701.x64.trimmed.zip` release asset directly instead of querying `https://api.github.com/repos/win-acme/win-acme/releases/latest` and searching the returned asset list. This avoids Custom Script Extension failures where the GitHub API response is missing or does not expose the expected asset shape in locked-down / rate-limited bootstrap contexts, while keeping the install deterministic and non-interactive.
+
 ## [v1.1.8] - 2026-05-10
 
 ### Fixed
