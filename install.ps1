@@ -254,13 +254,16 @@ try {
 # - Avoids winget dependency (unreliable on this VM image/CSE context).
 #
 # Behavior:
-# - Non-interactive and deterministic: re-installs from latest x64 trimmed zip
-#   on each run so state does not drift.
-# - Fails loudly if release discovery/download/extract/version check fails.
+# - Non-interactive and deterministic: re-installs a pinned x64 trimmed zip
+#   on each run so state does not drift and CSE does not depend on GitHub API
+#   release discovery/rate limits.
+# - Fails loudly if download/extract/version check fails.
 # ---------------------------------------------------------------------------
 $wacsDir             = 'C:\tools\win-acme'
 $wacsExe             = Join-Path $wacsDir 'wacs.exe'
-$winAcmeReleaseApi   = 'https://api.github.com/repos/win-acme/win-acme/releases/latest'
+$winAcmeVersion      = '2.2.9.1701'
+$winAcmeAssetName    = "win-acme.v$winAcmeVersion.x64.trimmed.zip"
+$winAcmeDownloadUrl  = "https://github.com/win-acme/win-acme/releases/download/v$winAcmeVersion/$winAcmeAssetName"
 
 Write-Host "`n--- Installing win-acme (ACME client) ---"
 try {
@@ -270,21 +273,11 @@ try {
     }
     New-Item -ItemType Directory -Path $wacsDir -Force | Out-Null
 
-    Write-Host "Discovering latest win-acme release from $winAcmeReleaseApi"
-    $release = Invoke-RestMethod -Uri $winAcmeReleaseApi -UseBasicParsing
-    $asset = $release.assets |
-        Where-Object { $_.name -like 'win-acme.*.x64.trimmed.zip' } |
-        Select-Object -First 1
+    $wacsZip = Join-Path $env:TEMP $winAcmeAssetName
+    Write-Host "Downloading $winAcmeAssetName"
+    Invoke-WebRequest -Uri $winAcmeDownloadUrl -OutFile $wacsZip -UseBasicParsing
 
-    if (-not $asset) {
-        throw 'Could not find the latest win-acme x64 trimmed release asset.'
-    }
-
-    $wacsZip = Join-Path $env:TEMP $asset.name
-    Write-Host "Downloading $($asset.name)"
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $wacsZip -UseBasicParsing
-
-    Write-Host "Extracting $($asset.name) to $wacsDir"
+    Write-Host "Extracting $winAcmeAssetName to $wacsDir"
     Expand-Archive -Path $wacsZip -DestinationPath $wacsDir -Force
     Remove-Item -Path $wacsZip -Force -ErrorAction SilentlyContinue
 
