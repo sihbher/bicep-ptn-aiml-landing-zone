@@ -244,6 +244,65 @@ try {
     Write-Warning "Python install failed: $_. Consumer postProvision scripts that require Python on the jumpbox may need to install it manually."
 }
 
+# ---------------------------------------------------------------------------
+# win-acme (ACME client) — default jumpbox installation for provider-agnostic
+# certificate workflows under network isolation (issue #53).
+#
+# Why built-in:
+# - Workstation path handles DNS provider updates (TXT / A records).
+# - Jumpbox path handles issuance + Azure-side import from inside the VNet.
+# - Avoids winget dependency (unreliable on this VM image/CSE context).
+#
+# Behavior:
+# - Non-interactive and deterministic: re-installs from latest x64 trimmed zip
+#   on each run so state does not drift.
+# - Fails loudly if release discovery/download/extract/version check fails.
+# ---------------------------------------------------------------------------
+$wacsDir             = 'C:\tools\win-acme'
+$wacsExe             = Join-Path $wacsDir 'wacs.exe'
+$winAcmeReleaseApi   = 'https://api.github.com/repos/win-acme/win-acme/releases/latest'
+
+Write-Host "`n--- Installing win-acme (ACME client) ---"
+try {
+    if (Test-Path $wacsDir) {
+        Write-Host "Removing pre-existing $wacsDir to guarantee a deterministic install"
+        Remove-Item -Path $wacsDir -Recurse -Force -ErrorAction Stop
+    }
+    New-Item -ItemType Directory -Path $wacsDir -Force | Out-Null
+
+    Write-Host "Discovering latest win-acme release from $winAcmeReleaseApi"
+    $release = Invoke-RestMethod -Uri $winAcmeReleaseApi -UseBasicParsing
+    $asset = $release.assets |
+        Where-Object { $_.name -like 'win-acme.*.x64.trimmed.zip' } |
+        Select-Object -First 1
+
+    if (-not $asset) {
+        throw 'Could not find the latest win-acme x64 trimmed release asset.'
+    }
+
+    $wacsZip = Join-Path $env:TEMP $asset.name
+    Write-Host "Downloading $($asset.name)"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $wacsZip -UseBasicParsing
+
+    Write-Host "Extracting $($asset.name) to $wacsDir"
+    Expand-Archive -Path $wacsZip -DestinationPath $wacsDir -Force
+    Remove-Item -Path $wacsZip -Force -ErrorAction SilentlyContinue
+
+    if (-not (Test-Path $wacsExe)) {
+        throw "win-acme install failed: expected executable not found at $wacsExe"
+    }
+
+    & $wacsExe --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "win-acme version check failed (exit=$LASTEXITCODE)"
+    }
+
+    Write-Host "win-acme successfully installed at $wacsExe" -ForegroundColor Green
+} catch {
+    Write-Error "win-acme installation failed: $_"
+    throw
+}
+
 # Refresh PATH for the rest of this CSE run so the tools above are resolvable
 # without waiting for the post-CSE reboot.
 $env:PATH = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\ProgramData\chocolatey\bin;$env:PATH"

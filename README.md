@@ -153,9 +153,10 @@ When `networkIsolation=true`, egress from the jumpbox and workload subnets is fo
 | `AllowJumpboxBootstrap` | `jumpboxSubnetPrefix` | Chocolatey, NuGet, VS Installer, `download.microsoft.com`, `aka.ms`, `go.microsoft.com`, `*.core.windows.net`, `*.azureedge.net` | `choco install`, VS Code/PowerShell Core/Azure CLI/AZD MSIs (Python is installed from python.org embeddable zip — see `AllowJumpboxDevRuntimes`) |
 | `AllowJumpboxDevRuntimes` | `jumpboxSubnetPrefix` | `*.python.org`, `*.pypi.org`, `*.pythonhosted.org`, `*.pypa.io`, `*.npmjs.org` | `pip install`, `npm install`, jumpbox Python embeddable-zip install + `get-pip.py` bootstrap |
 | `AllowJumpboxEditors` | `jumpboxSubnetPrefix` | `update.code.visualstudio.com`, `*.vo.msecnd.net`, `*.vscode-cdn.net` | VS Code updates |
+| `AllowJumpboxAcme` | `jumpboxSubnetPrefix` | `api.github.com`, `acme-v02.api.letsencrypt.org` | win-acme release discovery + ACME v2 issuance/renewal from jumpbox |
 | `AllowAcrTasks` | `devopsBuildAgentsSubnetPrefix` | `*.azurecr.io`, `*.data.azurecr.io` | ACR Tasks agent pool talking to its registry |
 
-Set `extendFirewallForJumpboxBootstrap=false` to skip the three jumpbox-scoped rules when egress is managed centrally by another policy.
+Set `extendFirewallForJumpboxBootstrap=false` to skip the jumpbox-scoped rules when egress is managed centrally by another policy.
 
 ### Permissions
 
@@ -217,6 +218,7 @@ Current default configuration provisions a single Hello World container app (`or
 | GenAI App Configuration Store | App Configuration Data Owner | Jumpbox VM | Full control over configuration settings |
 | GenAI App Key Vault | Key Vault Contributor | Jumpbox VM | Manage Key Vault settings |
 | GenAI App Key Vault | Key Vault Secrets Officer | Jumpbox VM | Create Key Vault secrets |
+| GenAI App Key Vault | Key Vault Certificates Officer | Jumpbox VM | Import/manage Key Vault certificates for public ingress TLS |
 | GenAI App Search Service | Search Service Contributor | Jumpbox VM | Create/update search service elements |
 | GenAI App Search Service | Search Index Data Contributor | Jumpbox VM | Read/write search index data |
 | GenAI App Storage Account | Storage Blob Data Contributor | Jumpbox VM | Read/write blob data |
@@ -272,23 +274,24 @@ publicIngress: {
    - HTTP:80 becomes a permanent HTTP→HTTPS redirect.
    - NSG allows TCP/443 from the supplied source CIDRs only.
 
-**Post-deploy runbook (BYO cert + DNS):**
+**Post-deploy runbook (provider-agnostic DNS + jumpbox ACME):**
 
-1. Provision (or import) a TLS certificate for your custom hostname (e.g., `app.contoso.com`) into the landing-zone Key Vault as a **secret** (PFX without passphrase, base64-encoded — App Gateway requires this exact shape) and capture the **versionless** secret URI (`https://<kv>.vault.azure.net/secrets/<name>`).
-2. Create a public DNS A record for the hostname pointing at `PUBLIC_INGRESS_PUBLIC_IP` (surfaced as a deployment output).
-3. Set the operator parameters in `main.parameters.json` (or via `azd env set` followed by an edit since `publicIngress` is an aggregate object):
+1. **Workstation (DNS provider side):** choose your DNS provider/registrar and prepare your hostname (example: `app.contoso.com`). No provider-specific integration is required in this landing zone.
+2. **Jumpbox (certificate issuance/import side):** use the built-in ACME client installed by `install.ps1` at `C:\tools\win-acme\wacs.exe` (DNS-01 flow), then import the resulting certificate into the landing-zone Key Vault. The jumpbox MI has `Key Vault Certificates Officer` for this workflow.
+3. **Workstation (DNS provider side):** create/update the public DNS A record for the hostname pointing at `PUBLIC_INGRESS_PUBLIC_IP` (deployment output).
+4. Capture the **versionless** Key Vault secret URI for the certificate (`https://<kv>.vault.azure.net/secrets/<name>`), then set operator parameters in `main.parameters.json` (or via `azd env set` followed by an edit since `publicIngress` is an aggregate object):
    ```jsonc
    "publicIngress": {
-     "value": {
+      "value": {
        "enabled": true,
        "frontendHostName": "app.contoso.com",
        "sslCertSecretId": "https://<kv>.vault.azure.net/secrets/<name>",
-       "allowedSourceAddressPrefixes": ["203.0.113.0/24"]
-     }
-   }
-   ```
-4. Run `azd provision` again. The HTTPS listener, redirect rule, and NSG allow rule are now in place.
-5. Validate end-to-end: `curl -v https://app.contoso.com/` should return the Container App's response; `curl -v http://app.contoso.com/` should redirect to HTTPS.
+        "allowedSourceAddressPrefixes": ["203.0.113.0/24"]
+      }
+    }
+    ```
+5. Run `azd provision` again. The HTTPS listener, redirect rule, and NSG allow rule are now in place.
+6. Validate end-to-end: `curl -v https://app.contoso.com/` should return the Container App's response; `curl -v http://app.contoso.com/` should redirect to HTTPS.
 
 **Teardown:** run `azd down` to remove the entire deployment, or delete the gateway/PIP/WAF policy/NSG/UAI manually. As stated above, flipping `enabled` back to `false` and re-provisioning will **not** delete the resources due to ARM incremental deployment semantics.
 

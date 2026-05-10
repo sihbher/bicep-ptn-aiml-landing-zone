@@ -755,6 +755,15 @@ var _firewallDevRuntimeFqdns = [
   'registry.npmjs.org'
   '*.npmjs.org'
 ]
+// Jumpbox ACME workflow egress (issue #53): scoped only to the jumpbox subnet
+// and only when `extendFirewallForJumpboxBootstrap=true`.
+// - api.github.com: discover latest win-acme release asset during bootstrap.
+// - acme-v02.api.letsencrypt.org: Let's Encrypt ACME v2 directory endpoint
+//   used during certificate issuance/renewal.
+var _firewallJumpboxAcmeFqdns = [
+  'api.github.com'
+  'acme-v02.api.letsencrypt.org'
+]
 #disable-next-line no-hardcoded-env-urls
 var _firewallEditorFqdns = [
   'update.code.visualstudio.com'
@@ -1092,6 +1101,15 @@ resource firewallPolicyDefaultRuleCollectionGroup 'Microsoft.Network/firewallPol
               { protocolType: 'Https', port: 443 }
             ]
             targetFqdns: extendFirewallForJumpboxBootstrap ? _firewallEditorFqdns : []
+            sourceAddresses: [jumpboxSubnetPrefix]
+          }
+          {
+            ruleType: 'ApplicationRule'
+            name: 'AllowJumpboxAcme'
+            protocols: [
+              { protocolType: 'Https', port: 443 }
+            ]
+            targetFqdns: extendFirewallForJumpboxBootstrap ? _firewallJumpboxAcmeFqdns : []
             sourceAddresses: [jumpboxSubnetPrefix]
           }
           {
@@ -1442,6 +1460,13 @@ var _testVmRoles = (deployVM && _networkIsolation) ? concat(
     {
       principalId: _testVmPrincipalId
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', const.roles.KeyVaultSecretsOfficer.guid)
+      #disable-next-line BCP318
+      resourceId: keyVault.id
+      principalType: 'ServicePrincipal'
+    }
+    {
+      principalId: _testVmPrincipalId
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', const.roles.KeyVaultCertificatesOfficer.guid)
       #disable-next-line BCP318
       resourceId: keyVault.id
       principalType: 'ServicePrincipal'
