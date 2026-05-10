@@ -55,17 +55,18 @@ module cosmosDb 'br/public:avm/res/document-db/database-account:0.18.0' = if (em
     }
     privateEndpoints: privateNetworkingEnabled
       ? [
-          {
-            privateDnsZoneGroup: !empty(privateDnsZoneResourceId) ? {
+          union({
+            service: 'Sql'
+            subnetResourceId: privateEndpointSubnetResourceId!
+          }, !empty(privateDnsZoneResourceId) ? {
+            privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
                   privateDnsZoneResourceId: privateDnsZoneResourceId!
                 }
               ]
-            } : null
-            service: 'Sql'
-            subnetResourceId: privateEndpointSubnetResourceId!
-          }
+            }
+          } : {})
         ]
       : []
     roleAssignments: roleAssignments

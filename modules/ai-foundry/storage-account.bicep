@@ -76,18 +76,19 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.26.2' = {
     }
     privateEndpoints: !empty(privateEndpointSubnetResourceId)
       ? [
-          {
+          union({
             name: 'pe-${name}-blob'
             service: 'blob'
             subnetResourceId: privateEndpointSubnetResourceId
-            privateDnsZoneGroup: !empty(blobPrivateDnsZoneResourceId) ? {
+          }, !empty(blobPrivateDnsZoneResourceId) ? {
+            privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
                   privateDnsZoneResourceId: blobPrivateDnsZoneResourceId
                 }
               ]
-            } : null
-          }
+            }
+          } : {})
         ]
       : []
     enableTelemetry: enableTelemetry

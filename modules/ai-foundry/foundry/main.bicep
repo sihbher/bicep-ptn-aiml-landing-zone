@@ -93,7 +93,7 @@ module foundryAccount 'modules/account.bicep' = {
     aiModelDeployments: aiModelDeployments
     privateEndpointSubnetResourceId: privateEndpointSubnetResourceId
     agentSubnetResourceId: aiFoundryConfiguration.?networking.?agentServiceSubnetResourceId
-    privateDnsZoneResourceIds: !empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId)
+    privateDnsZoneResourceIds: !empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?openAiPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?aiServicesPrivateDnsZoneResourceId)
       ? [
           aiFoundryConfiguration!.networking!.cognitiveServicesPrivateDnsZoneResourceId!
           aiFoundryConfiguration!.networking!.openAiPrivateDnsZoneResourceId!
@@ -251,7 +251,9 @@ module foundryProject 'modules/project/main.bicep' = {
 // cannot raise `AccountProvisioningStateInvalid`. Fully declarative,
 // policy-neutral (no deploymentScripts, no shared-key storage required).
 // =============================================================================
-module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.11.0' = if (!empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking)) {
+var hasAllFoundryPrivateDnsZoneIds = !empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?openAiPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?aiServicesPrivateDnsZoneResourceId)
+
+module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.11.0' = if (!empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking) && hasAllFoundryPrivateDnsZoneIds) {
   name: take('module.account.pe.${resourcesName}', 64)
   params: {
     name: 'pep-${foundryAccount.outputs.name}-account'
@@ -269,7 +271,7 @@ module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint
         }
       }
     ]
-    privateDnsZoneGroup: (!empty(aiFoundryConfiguration.?networking.?cognitiveServicesPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?openAiPrivateDnsZoneResourceId) && !empty(aiFoundryConfiguration.?networking.?aiServicesPrivateDnsZoneResourceId)) ? {
+    privateDnsZoneGroup: {
       privateDnsZoneGroupConfigs: [
         {
           privateDnsZoneResourceId: aiFoundryConfiguration!.networking!.cognitiveServicesPrivateDnsZoneResourceId!
@@ -281,7 +283,31 @@ module foundryAccountPrivateEndpoint 'br/public:avm/res/network/private-endpoint
           privateDnsZoneResourceId: aiFoundryConfiguration!.networking!.aiServicesPrivateDnsZoneResourceId!
         }
       ]
-    } : null
+    }
+  }
+  dependsOn: [
+    foundryProject
+  ]
+}
+
+module foundryAccountPrivateEndpointWithoutDns 'br/public:avm/res/network/private-endpoint:0.11.0' = if (!empty(privateEndpointSubnetResourceId) && !empty(aiFoundryConfiguration.?networking) && !hasAllFoundryPrivateDnsZoneIds) {
+  name: take('module.account.pe.${resourcesName}', 64)
+  params: {
+    name: 'pep-${foundryAccount.outputs.name}-account'
+    location: location
+    tags: tags
+    subnetResourceId: privateEndpointSubnetResourceId!
+    privateLinkServiceConnections: [
+      {
+        name: 'pep-${foundryAccount.outputs.name}-account'
+        properties: {
+          privateLinkServiceId: foundryAccount.outputs.resourceId
+          groupIds: [
+            'account'
+          ]
+        }
+      }
+    ]
   }
   dependsOn: [
     foundryProject

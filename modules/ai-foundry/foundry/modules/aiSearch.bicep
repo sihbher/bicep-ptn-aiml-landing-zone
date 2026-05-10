@@ -63,16 +63,17 @@ module aiSearch 'br/public:avm/res/search/search-service:0.11.1' = if (empty(exi
     roleAssignments: roleAssignments
     privateEndpoints: privateNetworkingEnabled
       ? [
-          {
-            privateDnsZoneGroup: !empty(privateDnsZoneResourceId) ? {
+          union({
+            subnetResourceId: privateEndpointSubnetResourceId!
+          }, !empty(privateDnsZoneResourceId) ? {
+            privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
                   privateDnsZoneResourceId: privateDnsZoneResourceId!
                 }
               ]
-            } : null
-            subnetResourceId: privateEndpointSubnetResourceId!
-          }
+            }
+          } : {})
         ]
       : []
     tags: tags

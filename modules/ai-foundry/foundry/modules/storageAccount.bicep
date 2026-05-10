@@ -64,17 +64,18 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.28.0' = if (e
     supportsHttpsTrafficOnly: true
     privateEndpoints: privateNetworkingEnabled
       ? [
-          {
-            privateDnsZoneGroup: !empty(blobPrivateDnsZoneResourceId) ? {
+          union({
+            service: 'blob'
+            subnetResourceId: privateEndpointSubnetResourceId!
+          }, !empty(blobPrivateDnsZoneResourceId) ? {
+            privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
                   privateDnsZoneResourceId: blobPrivateDnsZoneResourceId!
                 }
               ]
-            } : null
-            service: 'blob'
-            subnetResourceId: privateEndpointSubnetResourceId!
-          }
+            }
+          } : {})
         ]
       : []
     roleAssignments: roleAssignments

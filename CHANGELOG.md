@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.1.7] - 2026-05-10
+
+### Fixed
+- **Hub & Spoke with policy-managed Private DNS no longer emits `privateDnsZoneGroup: null` to AVM private-endpoint modules** (PR #51 follow-up): `modules/networking/private-endpoint.bicep` now routes through two explicit AVM module paths — one with `privateDnsZoneGroup` and one without that property — so policy-managed DNS scenarios omit the property entirely instead of sending a literal null.
+- **AI Foundry account DNS-zone gating now requires the full 3-zone set before emitting DNS configs** (PR #51 follow-up): `modules/ai-foundry/foundry/main.bicep` now guards `privateDnsZoneResourceIds` and the Foundry account private-endpoint DNS zone group with the same complete check (`cognitiveServices`, `openAi`, `aiServices`) to prevent partial-input non-null assertions from breaking deployment.
+- **AI Foundry associated-resource modules now omit PE DNS-zone groups when IDs are not provided** (PR #51 follow-up): `modules/ai-foundry/storage-account.bicep` and the Foundry submodules for Search, Cosmos DB, Key Vault, and Storage now build private endpoint objects without `privateDnsZoneGroup` unless a DNS zone ID is present, aligning runtime behavior with the policy-managed DNS model.
+
 ## [v1.1.6] - 2026-05-06
 
 ### Fixed

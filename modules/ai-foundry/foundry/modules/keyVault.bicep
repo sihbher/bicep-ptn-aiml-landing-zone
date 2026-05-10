@@ -58,17 +58,18 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.13.3' = if (empty(existingR
     softDeleteRetentionInDays: 7
     privateEndpoints: privateNetworkingEnabled
       ? [
-          {
-            privateDnsZoneGroup: !empty(privateDnsZoneResourceId) ? {
+          union({
+            service: 'vault'
+            subnetResourceId: privateEndpointSubnetResourceId!
+          }, !empty(privateDnsZoneResourceId) ? {
+            privateDnsZoneGroup: {
               privateDnsZoneGroupConfigs: [
                 {
                   privateDnsZoneResourceId: privateDnsZoneResourceId!
                 }
               ]
-            } : null
-            service: 'vault'
-            subnetResourceId: privateEndpointSubnetResourceId!
-          }
+            }
+          } : {})
         ]
       : []
     roleAssignments: roleAssignments
