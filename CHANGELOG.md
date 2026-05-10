@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.  
 This format follows [Keep a Changelog](https://keepachangelog.com/) and adheres to [Semantic Versioning](https://semver.org/).
 
+## [v1.1.8] - 2026-05-10
+
+### Fixed
+- **Jumpbox certificate workflow now has first-class ACME support under network isolation** (fixes #53): `install.ps1` now installs win-acme non-interactively from the latest `win-acme.*.x64.trimmed.zip` release asset, validates installation with `wacs.exe --version`, and fails loudly on bootstrap errors instead of silently continuing.
+- **Firewall least-privilege allow-list now explicitly covers ACME issuance path for jumpbox** (fixes #53): `main.bicep` adds a dedicated jumpbox-scoped ACME FQDN group (`api.github.com`, `acme-v02.api.letsencrypt.org`) and a dedicated `AllowJumpboxAcme` application rule gated by `extendFirewallForJumpboxBootstrap`.
+- **Jumpbox MI now has certificate import RBAC by default** (fixes #53): `main.bicep` adds `Key Vault Certificates Officer` to jumpbox Key Vault role assignments so certificate import and certificate lifecycle operations no longer require manual RBAC patching.
+
+### Changed
+- **README runbook is now provider-agnostic and explicitly split by operational boundary** (fixes #53): DNS operations stay on workstation/provider side, while ACME issuance/import and Azure-side steps are documented on the jumpbox side using built-in win-acme tooling.
+
 ## [v1.1.7] - 2026-05-10
 
 ### Fixed
