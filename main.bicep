@@ -95,6 +95,17 @@ When false (default), the module creates and manages all Private DNS Zones and l
 Requires networkIsolation to be true to have any effect.''')
 param policyManagedPrivateDns bool = false
 
+@description('''Resource group name where existing Private DNS Zones are located.
+When provided, DNS zone creation is skipped (zones are assumed to already exist) but DNS zone groups
+on Private Endpoints are still created, pointing to the zones in this resource group.
+Use this in flat-VNet environments where Private DNS Zones were pre-created in a centralized resource group
+that differs from both the VNet resource group and the deployment resource group.
+Leave empty to use default behavior (zones co-located with VNet or deployment RG).''')
+param existingDnsZonesResourceGroupName string = ''
+
+@description('Subscription ID where existing Private DNS Zones are located. Only used when existingDnsZonesResourceGroupName is provided. Defaults to the current deployment subscription when empty.')
+param existingDnsZonesSubscriptionId string = ''
+
 @description('The Azure region where private endpoints will be created. Defaults to the main deployment location. Use this when your VNet is in a different region than the resources.')
 param privateEndpointLocation string = ''
 
@@ -227,6 +238,9 @@ param deployNsgs bool = true
 
 @description('Deploy Azure Firewall with UDR for egress traffic control. Defaults to true when networkIsolation is enabled.')
 param deployAzureFirewall bool = true
+
+@description('Deploy a VPN Gateway subnet. Set to true only when a VPN/ExpressRoute gateway is required.')
+param deployVpnGateway bool = false
 
 @description('Deploy an ACR Task agent pool so image builds can run inside the VNet when the registry has public access disabled. Requires a Premium container registry (auto-selected when networkIsolation is true) and is gated on both deployContainerRegistry and networkIsolation.')
 param deployAcrTaskAgentPool bool = true
@@ -528,7 +542,8 @@ var _networkIsolation = empty(string(networkIsolation)) ? false : bool(networkIs
 // the operator explicitly opts in via enablePrivateLogAnalytics. This lets isolated
 // deployments opt-out of AMPLS to avoid cross-workload private DNS conflicts.
 var _deployAmpls = _networkIsolation && deployAppInsights && deployLogAnalytics && enablePrivateLogAnalytics
-var _deployPrivateDnsZones = _networkIsolation && !policyManagedPrivateDns
+var _useExistingDnsZones = !empty(existingDnsZonesResourceGroupName)
+var _deployPrivateDnsZones = _networkIsolation && !policyManagedPrivateDns && !_useExistingDnsZones
 var _searchServiceLocation = empty(searchServiceLocation) ? location : searchServiceLocation
 var _speechServiceLocation = empty(speechServiceLocation) ? location : speechServiceLocation
 
@@ -830,79 +845,97 @@ resource routeTable 'Microsoft.Network/routeTables@2024-07-01' = if (_networkIso
   }
 }
 
-// Base subnets that are always included
-var baseSubnets = [
-      {
-        name: agentSubnetName
-        addressPrefix: agentSubnetPrefix 
-        delegation: 'Microsoft.app/environments'
-        routeTableResourceId: routeTable.id
-        serviceEndpoints: [
-          'Microsoft.CognitiveServices'
-        ]
-      }
-      {
-        name: peSubnetName
-        addressPrefix: peSubnetPrefix 
-        routeTableResourceId: routeTable.id
-        serviceEndpoints: [
-          'Microsoft.AzureCosmosDB'
-        ]        
-        delegation: ''
-      }
-      {
-        name: gatewaySubnetName
-        addressPrefix: gatewaySubnetPrefix 
-        delegation: ''
-        serviceEndpoints : []
-      }
-      {
-        name: azureBastionSubnetName
-        addressPrefix: azureBastionSubnetPrefix
-        #disable-next-line BCP318
-        networkSecurityGroupResourceId: (deployVM && _networkIsolation && deployNsgs) ? bastionNsg!.outputs.id : ''
-        delegation: ''
-        serviceEndpoints : []
-      }
-      {
-        name: azureFirewallSubnetName
-        addressPrefix: azureFirewallSubnetPrefix 
-        delegation: ''
-        serviceEndpoints : []
-      }
-      {
-        name: azureAppGatewaySubnetName
-        addressPrefix: azureAppGatewaySubnetPrefix  
-        #disable-next-line BCP318
-        networkSecurityGroupResourceId: _publicIngressEnabled ? appGwNsg!.outputs.id : ''
-        delegation: ''
-        serviceEndpoints : []
-      }
-      {
-        name: jumpboxSubnetName
-        addressPrefix: jumpboxSubnetPrefix 
-        natGatewayResourceId: natGateway.id
-        routeTableResourceId: routeTable.id
-        delegation: ''
-        serviceEndpoints : []
-      }
-      {
-        name: acaEnvironmentSubnetName
-        addressPrefix: acaEnvironmentSubnetPrefix  
-        delegation: 'Microsoft.app/environments'
-        routeTableResourceId: routeTable.id
-        serviceEndpoints: [
-          'Microsoft.AzureCosmosDB'
-        ]
-      }
-      {
-        name: devopsBuildAgentsSubnetName
-        addressPrefix: devopsBuildAgentsSubnetPrefix 
-        routeTableResourceId: routeTable.id
-        delegation: ''
-        serviceEndpoints : []
-      }
-]
+// Base subnets — conditionally assembled based on deployment flags
+var baseSubnets = concat(
+  // Core subnets (always included when network isolation is enabled)
+  [
+    {
+      name: agentSubnetName
+      addressPrefix: agentSubnetPrefix
+      delegation: 'Microsoft.app/environments'
+      routeTableResourceId: routeTable.id
+      serviceEndpoints: [
+        'Microsoft.CognitiveServices'
+      ]
+    }
+    {
+      name: peSubnetName
+      addressPrefix: peSubnetPrefix
+      routeTableResourceId: routeTable.id
+      serviceEndpoints: [
+        'Microsoft.AzureCosmosDB'
+      ]
+      delegation: ''
+    }
+    {
+      name: acaEnvironmentSubnetName
+      addressPrefix: acaEnvironmentSubnetPrefix
+      delegation: 'Microsoft.app/environments'
+      routeTableResourceId: routeTable.id
+      serviceEndpoints: [
+        'Microsoft.AzureCosmosDB'
+      ]
+    }
+  ],
+  // VPN Gateway subnet (conditional on deployVpnGateway)
+  deployVpnGateway ? [
+    {
+      name: gatewaySubnetName
+      addressPrefix: gatewaySubnetPrefix
+      delegation: ''
+      serviceEndpoints: []
+    }
+  ] : [],
+  // Bastion + Jumpbox subnets (conditional on deployVM)
+  deployVM ? [
+    {
+      name: azureBastionSubnetName
+      addressPrefix: azureBastionSubnetPrefix
+      #disable-next-line BCP318
+      networkSecurityGroupResourceId: (_networkIsolation && deployNsgs) ? bastionNsg!.outputs.id : ''
+      delegation: ''
+      serviceEndpoints: []
+    }
+    {
+      name: jumpboxSubnetName
+      addressPrefix: jumpboxSubnetPrefix
+      natGatewayResourceId: natGateway.id
+      routeTableResourceId: routeTable.id
+      delegation: ''
+      serviceEndpoints: []
+    }
+  ] : [],
+  // Azure Firewall subnet (conditional on deployAzureFirewall)
+  deployAzureFirewall ? [
+    {
+      name: azureFirewallSubnetName
+      addressPrefix: azureFirewallSubnetPrefix
+      delegation: ''
+      serviceEndpoints: []
+    }
+  ] : [],
+  // App Gateway subnet (conditional on public ingress)
+  _publicIngressEnabled ? [
+    {
+      name: azureAppGatewaySubnetName
+      addressPrefix: azureAppGatewaySubnetPrefix
+      #disable-next-line BCP318
+      networkSecurityGroupResourceId: appGwNsg!.outputs.id
+      delegation: ''
+      serviceEndpoints: []
+    }
+  ] : [],
+  // DevOps Build Agents subnet (conditional on deployAcrTaskAgentPool)
+  _deployAcrTaskAgentPool ? [
+    {
+      name: devopsBuildAgentsSubnetName
+      addressPrefix: devopsBuildAgentsSubnetPrefix
+      routeTableResourceId: routeTable.id
+      delegation: ''
+      serviceEndpoints: []
+    }
+  ] : []
+)
 
 var subnets = baseSubnets
 
@@ -1583,7 +1616,9 @@ resource cse 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' = if (dep
 // Private DNS Zones (consolidated into a single for-loop module to keep compiled ARM template under 4 MB).
 ///////////////////////////////////////////////////////////////////////////
 
-var _dnsZonesTargetRg = useExistingVNet && !sideBySideDeploy ? varExistingVnetResourceGroupName : resourceGroup().name
+var _dnsZonesTargetRg = _useExistingDnsZones
+  ? existingDnsZonesResourceGroupName
+  : (useExistingVNet && !sideBySideDeploy ? varExistingVnetResourceGroupName : resourceGroup().name)
 var _dnsZonesLinkSuffix = useExistingVNet ? '-byon' : ''
 
 var _dnsZonesList = _deployPrivateDnsZones ? concat(
@@ -1834,8 +1869,12 @@ module privateEndpoints 'modules/networking/private-endpoints.bicep' = if (_netw
 //////////////////////////////////////////////////////////////////////////
 
 
-var _dnsZonesSubscriptionId = useExistingVNet && !sideBySideDeploy ? varExistingVnetSubscriptionId : subscription().subscriptionId
-var _dnsZonesResourceGroupName = useExistingVNet && !sideBySideDeploy ? varExistingVnetResourceGroupName : resourceGroup().name
+var _dnsZonesSubscriptionId = _useExistingDnsZones
+  ? (!empty(existingDnsZonesSubscriptionId) ? existingDnsZonesSubscriptionId : subscription().subscriptionId)
+  : (useExistingVNet && !sideBySideDeploy ? varExistingVnetSubscriptionId : subscription().subscriptionId)
+var _dnsZonesResourceGroupName = _useExistingDnsZones
+  ? existingDnsZonesResourceGroupName
+  : (useExistingVNet && !sideBySideDeploy ? varExistingVnetResourceGroupName : resourceGroup().name)
 var _dnsZoneCogSvcsId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')
 var _dnsZoneOpenAiId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')
 var _dnsZoneAiServicesId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.services.ai.azure.com')
@@ -1991,11 +2030,11 @@ module aiFoundry 'modules/ai-foundry/main.bicep' = if (deployAiFoundry) {
 
 
 var varPeSubnetId = empty(existingVnetResourceId!)
-  ? '${virtualNetworkResourceId}/subnets/pe-subnet'
-  : '${existingVnetResourceId!}/subnets/pe-subnet'
+  ? '${virtualNetworkResourceId}/subnets/${peSubnetName}'
+  : '${existingVnetResourceId!}/subnets/${peSubnetName}'
 
 var varAfNetworkingOverride = _networkIsolation
-  ? (policyManagedPrivateDns
+  ? ((policyManagedPrivateDns && !_useExistingDnsZones)
     ? {
         agentServiceSubnetResourceId: deployAiFoundrySubnet ? _agentSubnetId : null
       }
