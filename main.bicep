@@ -336,6 +336,9 @@ param deployAAfAgentSvc bool = true
 @description('Enable agentic retrieval features in Azure AI Search indexes. Requires vectorizer configuration and semantic search.')
 param enableAgenticRetrieval bool = false
 
+@description('Temporarily deploy App Configuration with public access so ARM can write key-values during provisioning. postProvision will disable public access afterwards.')
+param tempPublicAppConfig bool = false
+
 // ----------------------------------------------------------------------
 // Reuse Existing Services Parameters
 // Note: Reuse is optional. Leave empty to create new resources
@@ -3294,7 +3297,7 @@ resource appConfig 'Microsoft.AppConfiguration/configurationStores@2024-05-01' =
       authenticationMode: 'Pass-through'
       privateLinkDelegation: _networkIsolation ? 'Enabled' : 'Disabled'
     }
-    publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
+    publicNetworkAccess: (_networkIsolation && !tempPublicAppConfig) ? 'Disabled' : 'Enabled'
     disableLocalAuth: false
   }
 }
@@ -3417,7 +3420,7 @@ module appConfigKeyVaultPopulate 'modules/app-configuration/app-configuration.bi
   }
 }
 
-module cosmosConfigKeyVaultPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployCosmosDb && deployAppConfig && !_networkIsolation) {
+module cosmosConfigKeyVaultPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployCosmosDb && deployAppConfig && (!_networkIsolation || tempPublicAppConfig)) {
   name: 'cosmosConfigKeyVaultPopulate'
   params: {
     #disable-next-line BCP318
@@ -3433,7 +3436,7 @@ module cosmosConfigKeyVaultPopulate 'modules/app-configuration/app-configuration
   }
 }
 
-module appConfigPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployAppConfig && !_networkIsolation) {
+module appConfigPopulate 'modules/app-configuration/app-configuration.bicep' = if (deployAppConfig && (!_networkIsolation || tempPublicAppConfig)) {
   name: 'appConfigPopulate'
   params: {
     #disable-next-line BCP318

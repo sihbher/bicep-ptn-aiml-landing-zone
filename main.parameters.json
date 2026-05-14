@@ -13,6 +13,7 @@
     "appConfigLabel":                      { "value": "gpt-rag" },
 
     "networkIsolation":                    { "value": "${NETWORK_ISOLATION}" },
+    "tempPublicAppConfig":                  { "value": "${TEMP_PUBLIC_APP_CONFIG=false}" },
     "useUAI":                              { "value": "${USE_UAI}" },
     "useCAppAPIKey":                       { "value": "${USE_CAPP_API_KEY}" },    
     "useZoneRedundancy":                   { "value": "false" },    
