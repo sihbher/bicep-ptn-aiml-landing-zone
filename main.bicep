@@ -1646,7 +1646,7 @@ var _dnsZonesList = _deployPrivateDnsZones ? concat(
     { dnsName: 'privatelink.monitor.azure.com',                       virtualNetworkLinkName: '${vnetName}-azure-monitor-link${_dnsZonesLinkSuffix}' }
     { dnsName: 'privatelink.oms.opinsights.azure.com',                virtualNetworkLinkName: '${vnetName}-oms-opinsights-link${_dnsZonesLinkSuffix}' }
     { dnsName: 'privatelink.ods.opinsights.azure.com',                virtualNetworkLinkName: '${vnetName}-ods-opinsights-link${_dnsZonesLinkSuffix}' }
-    { dnsName: 'privatelink.agentsvc.azure.automation.net',           virtualNetworkLinkName: '${vnetName}-azure-automation-link${_dnsZonesLinkSuffix}' }
+    { dnsName: 'privatelink.agentsvc.azure-automation.net',           virtualNetworkLinkName: '${vnetName}-azure-automation-link${_dnsZonesLinkSuffix}' }
   ] : []
 ) : []
 
@@ -1891,7 +1891,7 @@ var _dnsZoneAcrId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupNa
 var _dnsZoneAzureMonitorId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.monitor.azure.com')
 var _dnsZoneOmsOpsInsightsId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.oms.opinsights.azure.com')
 var _dnsZoneOdsOpsInsightsId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.ods.opinsights.azure.com')
-var _dnsZoneAzureAutomationId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.agentsvc.azure.automation.net')
+var _dnsZoneAzureAutomationId = resourceId(_dnsZonesSubscriptionId, _dnsZonesResourceGroupName, 'Microsoft.Network/privateDnsZones', 'privatelink.agentsvc.azure-automation.net')
 
 //AI Foundry Account User Managed Identity
 resource aiFoundryUAI 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (_useUAI) {
