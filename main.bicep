@@ -2464,7 +2464,7 @@ module cosmosDBAccount 'br/public:avm/res/document-db/database-account:0.15.1' =
     ]
     defaultConsistencyLevel: 'Session'
     capabilitiesToAdd: ['EnableServerless']
-    enableAnalyticalStorage: true
+    enableAnalyticalStorage: false
     enableFreeTier: false
     networkRestrictions: {
       publicNetworkAccess: _networkIsolation ? 'Disabled' : 'Enabled'
